@@ -298,8 +298,32 @@ fn doctor_reports_unhealthy_then_healthy_after_sync() {
         .args(["doctor", "--json"])
         .assert()
         .success()
-        .stdout(contains("\"pass\":5"))
+        .stdout(contains("\"pass\":6"))
         .stdout(contains("\"warn\":0"));
+}
+
+#[test]
+fn skill_install_writes_pack_and_doctor_reports_current() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    turu(tmp.path(), &repo)
+        .args(["skill", "install", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("\"files\":11"));
+
+    let router = repo.join(".turu/skills/whisper/whisper.md");
+    assert!(router.is_file());
+    assert!(repo.join(".turu/skills/whisper/subs/append.md").is_file());
+
+    turu(tmp.path(), &repo)
+        .args(["doctor", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("\"turu.managed-skills\""))
+        .stdout(contains("is current"));
 }
 
 #[test]

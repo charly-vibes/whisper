@@ -10,6 +10,7 @@
 
 pub mod config;
 pub mod doctor;
+pub mod skill_pack;
 pub mod workspace;
 
 /// Version of the CLI, injected from Cargo.

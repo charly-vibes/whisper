@@ -8,6 +8,7 @@ use std::path::Path;
 use genesis::doctor::{CheckEntry, DoctorReport};
 
 use crate::config::Resolved;
+use crate::skill_pack;
 use crate::workspace::{Facts, Scope, agents_file, legacy_variants, resolve, turu_injector};
 
 const REPO_SLOT: &str = "turu.repo-slot";
@@ -16,6 +17,7 @@ const BRANCH_SLOT: &str = "turu.branch-slot";
 const LEGACY_KEYS: &str = "turu.legacy-keys";
 const GROUP_ROOT: &str = "turu.group-root";
 const MANAGED_BLOCK: &str = "turu.managed-block";
+const MANAGED_SKILLS: &str = "turu.managed-skills";
 
 /// Run all doctor checks for the current checkout.
 pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> DoctorReport {
@@ -158,6 +160,47 @@ pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> Docto
             "turu sync",
         )
     });
+
+    // Managed skill pack staleness (optional pack: missing = pass).
+    let pack_dir = crate::workspace::repo_root(repo_root)
+        .join(".turu")
+        .join("skills")
+        .join("whisper");
+    let pack_check = if !pack_dir.exists() {
+        CheckEntry::pass(
+            MANAGED_SKILLS,
+            "whisper skill pack is current when installed",
+            "pack not installed (optional) — `turu skill install`",
+        )
+    } else {
+        match skill_pack::generate_pack("whisper") {
+            Ok(generated) => {
+                let expected = skill_pack::pack_content_hash(&generated);
+                match skill_pack::disk_content_hash(&pack_dir) {
+                    Ok(disk) if disk == expected => CheckEntry::pass(
+                        MANAGED_SKILLS,
+                        "whisper skill pack is current when installed",
+                        format!("`{}` is current", pack_dir.display()),
+                    ),
+                    _ => with_fix(
+                        CheckEntry::warn(
+                            MANAGED_SKILLS,
+                            "whisper skill pack is current when installed",
+                            format!("`{}` is stale", pack_dir.display()),
+                        ),
+                        "turu skill install",
+                    ),
+                }
+            }
+            Err(msg) => CheckEntry::fail(
+                MANAGED_SKILLS,
+                "whisper skill pack is current when installed",
+                msg,
+                None,
+            ),
+        }
+    };
+    checks.push(pack_check);
 
     DoctorReport::new("turu", checks)
 }

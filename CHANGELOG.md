@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-02-20
+
+### Added
+
+- `turu skill install [<dir>]` — first-party whisper skill pack shipped from this repo (dont's `skill_pack` pattern): deterministic generation, content hashes, 11 files (router + 10 sub-skills including manual fallbacks for link/decommission/consolidate)
+- `turu.managed-skills` doctor check — flags stale packs via content hashes (missing pack passes as optional)
+- Incitaciones whisper skill converted to a thin pointer that delegates to the CLI
+
 ## [0.2.0] - 2026-02-20
 
 ### Added

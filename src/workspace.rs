@@ -115,13 +115,17 @@ fn basename(p: &Path) -> String {
         .unwrap_or_else(|| p.to_string_lossy().to_string())
 }
 
+/// Git repo root for `dir` (falls back to `dir` outside a repo).
+pub fn repo_root(dir: &Path) -> PathBuf {
+    git(dir, &["rev-parse", "--show-toplevel"])
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dir.to_path_buf())
+}
+
 /// Path of the agent-facing file that hosts the turu managed block:
 /// `AGENTS.md` at the repo root (falls back to cwd outside a repo).
-pub fn agents_file(repo_root: &Path) -> PathBuf {
-    git(repo_root, &["rev-parse", "--show-toplevel"])
-        .map(PathBuf::from)
-        .unwrap_or_else(|| repo_root.to_path_buf())
-        .join("AGENTS.md")
+pub fn agents_file(dir: &Path) -> PathBuf {
+    repo_root(dir).join("AGENTS.md")
 }
 
 /// Injector with the `turu` block registered.

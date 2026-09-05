@@ -4,11 +4,12 @@
 
 use std::cell::Cell;
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::process::exit;
 
 use clap::{Parser, Subcommand};
 use genesis::guide::{CliFormat, CliVerbosity, Output, OutputFormat, Verbosity};
-use whisper::{CLI_VERSION, WhisperError, config, doctor, workspace};
+use whisper::{CLI_VERSION, WhisperError, config, doctor, skill_pack, workspace};
 
 thread_local! {
     static FORMAT: Cell<OutputFormat> = const { Cell::new(OutputFormat::Human) };
@@ -68,6 +69,21 @@ enum Commands {
         /// Target file (default: AGENTS.md at the repo root).
         #[arg(long)]
         file: Option<String>,
+    },
+    /// Install the first-party whisper skill pack (managed by turu).
+    Skill {
+        #[command(subcommand)]
+        command: SkillCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum SkillCommand {
+    /// Install the pack (default: <repo-root>/.turu/skills).
+    Install {
+        /// Destination dir. Common alternatives: ~/.claude/skills,
+        /// ~/.config/agents/skills.
+        dir: Option<String>,
     },
 }
 
@@ -259,6 +275,35 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                 Some(format!(
                     "`{}` now carries the deterministic routing map ({outcome})",
                     target.display()
+                )),
+            )
+        }
+        Commands::Skill {
+            command: SkillCommand::Install { dir },
+        } => {
+            let root = match dir {
+                Some(d) => PathBuf::from(d),
+                None => workspace::repo_root(&cwd).join(".turu").join("skills"),
+            };
+            let pack_dir = root.join("whisper");
+            let files = skill_pack::generate_pack("whisper").map_err(WhisperError::new)?;
+            for (rel, content) in &files {
+                let dest = pack_dir.join(rel);
+                std::fs::create_dir_all(dest.parent().unwrap()).map_err(WhisperError::from)?;
+                std::fs::write(&dest, content).map_err(WhisperError::from)?;
+            }
+            let data = serde_json::json!({
+                "pack": "whisper",
+                "target": pack_dir,
+                "files": files.len(),
+                "hash": skill_pack::pack_content_hash(&files),
+            });
+            (
+                data,
+                vec![],
+                Some(format!(
+                    "pack installed at `{}` — `turu doctor` reports staleness",
+                    pack_dir.display()
                 )),
             )
         }

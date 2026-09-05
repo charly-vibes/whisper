@@ -22,8 +22,9 @@ Part of the [charly-vibes](https://github.com/charly-vibes) tool suite; built on
 - `turu init` — create the workspace layout
 - `turu status` — one envelope with every relevant path and existence flag
 - `turu check` — detect legacy key variants, undefined groups, missing files
-- `turu doctor` — deep diagnostics: layout integrity, group health, legacy keys, managed block
+- `turu doctor` — deep diagnostics: layout integrity, group health, legacy keys, managed block, skill pack staleness
 - `turu sync` — inject the deterministic routing map into `AGENTS.md` as a `<!-- TURU:START -->` managed block, so agents read paths from a file instead of re-deriving them
+- `turu skill install` — ship the whisper skill from this repo: router + sub-skills (including manual fallbacks), content-hashed so `turu doctor` flags staleness. Targets `~/.claude/skills` or any dir; incitaciones keeps a thin pointer to it
 
 ## Install
 
