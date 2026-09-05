@@ -1,0 +1,32 @@
+pre-commit:
+  parallel: true
+  commands:
+    lint:
+      run: just lint
+    fmt:
+      run: just fmt-check
+    trailing-whitespace:
+      run: git diff --check --cached
+      exclude: 'Cargo.lock|*.patch'
+    end-of-file-fixer:
+      run: |
+        git diff --cached --name-only -z | xargs -0 -I{} sh -c 'test "$(tail -c1 "{}")" = "" || (echo "{}: missing trailing newline"; exit 1)'
+      exclude: 'Cargo.lock|*.png|*.ico|*.jpg|*.gif|*.pdf|*.woff2'
+    check-added-large-files:
+      run: |
+        git diff --cached --name-only -z | xargs -0 -I{} sh -c '
+          size=$(wc -c < "{}" 2>/dev/null || echo 0)
+          if [ "$size" -gt 5242880 ]; then
+            echo "{}: over 5MB"; exit 1
+          fi
+        '
+
+pre-push:
+  parallel: true
+  commands:
+    lint:
+      run: just lint
+    fmt:
+      run: just fmt-check
+    test:
+      run: cargo test
