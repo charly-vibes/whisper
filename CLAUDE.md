@@ -1,28 +1,6 @@
-# Whisper — Deterministic Knowledge Workspace
+# Project Instructions for AI Agents
 
-Rust CLI on `genesis-vibes` that makes the incitaciones `whisper` skill deterministic: canonical repo keys, branch slugs, worktree slots, and scope-based knowledge routing as pure binary behavior instead of LLM-improvised shell pipelines.
-
-> **CRITICAL**: Apply TDD and Tidy First throughout — each ticket maps to a red→green→refactor cycle; refactoring tasks are separate tickets from feature tasks.
-
-## Conventions
-
-- **genesis-vibes is the shared foundation** — use `envelope`, `guide` (`CliVerbosity`, `CliFormat`, `Output`), and `config` conventions. Do not hand-roll output envelopes or config parsing.
-- Binary is `whisper`; crate is `whisper-vibes` (the `whisper` name is taken on crates.io).
-- All output goes through the genesis JSON envelope — `--json` is the machine contract, `--human` the default.
-- Canonical repo key derivation is a **pure function** of the remote URL. Never machine-specific, never invented. See `src/workspace.rs`.
-
-## Quick Reference
-
-```bash
-just build     # cargo build
-just test      # cargo test
-just lint      # clippy -D warnings
-just run key   # try the core determinism command
-```
-
-## Config Model
-
-Precedence: repo (`.whisper/config.toml`, gitignored) > group (global `[groups.*]`) > global (`~/.config/whisper/config.toml`). Groups route a set of repos into one shared knowledge directory.
+This file provides instructions and context for AI coding agents working on this project.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:7510c1e2 -->
 ## Beads Issue Tracker
@@ -71,3 +49,22 @@ bd close <id>         # Complete work
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
+
+
+## Build & Test
+
+_Add your build and test commands here_
+
+```bash
+# Example:
+# npm install
+# npm test
+```
+
+## Architecture Overview
+
+_Add a brief overview of your project architecture_
+
+## Conventions & Patterns
+
+_Add your project-specific conventions here_
