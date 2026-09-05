@@ -9,6 +9,7 @@
 //! Built on `genesis-vibes` for the charly-vibes envelope/CLI conventions.
 
 pub mod config;
+pub mod doctor;
 pub mod workspace;
 
 /// Version of the CLI, injected from Cargo.

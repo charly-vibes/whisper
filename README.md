@@ -8,18 +8,22 @@
 
 `whisper` is a Rust CLI that makes the [incitaciones](https://github.com/charly-vibes/incitaciones) `whisper` skill deterministic.
 
-The whisper skill asks an agent to manage `~/.whisper/` — canonical repo keys, branch slugs, worktree slots, and scope-based knowledge routing — by hand-rolling shell pipelines. Every invocation is a fresh chance for the model to mis-derive a path. This tool turns that mechanical layer into a binary: the skill prompts call `whisper`, and the same inputs always produce the same outputs.
+The whisper skill asks an agent to manage `~/.whisper/` — canonical repo keys, branch slugs, worktree slots, and scope-based knowledge routing — by hand-rolling shell pipelines. Every invocation is a fresh chance for the model to mis-derive a path. This tool turns that mechanical layer into a binary: the skill prompts call the CLI, and the same inputs always produce the same outputs.
+
+**The command is `turu`** — following the song's *turututu* riff. `turututu` and `whisper` run as aliases, so existing scripts and skill prompts keep working.
 
 Part of the [charly-vibes](https://github.com/charly-vibes) tool suite; built on [genesis-vibes](https://github.com/charly-vibes/genesis) for the JSON envelope, config, and CLI conventions shared across the family.
 
 ## What it does
 
-- `whisper key` — canonical repo key, branch slug, and worktree slot for the current checkout (the pure determinism core)
-- `whisper resolve <scope>` — the exact destination path for a knowledge scope: `global`, `repo`, `branch`, `worktree`, or `group`
-- `whisper append <scope> --text "..."` — extend-don't-duplicate writes into the right file, creating parents as needed
-- `whisper init` — create the workspace layout
-- `whisper status` — one envelope with every relevant path and existence flag
-- `whisper check` — detect legacy key variants, undefined groups, missing files
+- `turu key` — canonical repo key, branch slug, and worktree slot for the current checkout (the pure determinism core)
+- `turu resolve <scope>` — the exact destination path for a knowledge scope: `global`, `repo`, `branch`, `worktree`, or `group`
+- `turu append <scope> --text "..."` — extend-don't-duplicate writes into the right file, creating parents as needed
+- `turu init` — create the workspace layout
+- `turu status` — one envelope with every relevant path and existence flag
+- `turu check` — detect legacy key variants, undefined groups, missing files
+- `turu doctor` — deep diagnostics: layout integrity, group health, legacy keys, managed block
+- `turu sync` — inject the deterministic routing map into `AGENTS.md` as a `<!-- TURU:START -->` managed block, so agents read paths from a file instead of re-deriving them
 
 ## Install
 
@@ -63,17 +67,18 @@ A repo can join a group two ways: privately, via its own `.whisper/config.toml`,
 The distilled whisper skill in incitantes replaces its shell-snippet procedures with:
 
 ```
-whisper key        # derive repo key / branch slug / worktree slot
-whisper resolve branch
-whisper append repo --text "deploy requires vault login"
+turu key        # derive repo key / branch slug / worktree slot
+turu resolve branch
+turu append repo --text "deploy requires vault login"
 ```
+
+Agents in any repo with a `TURU` managed block read the routing map straight from `AGENTS.md` — no prompt bookkeeping required. `turu sync` refreshes the block; `turu doctor` flags it when it drifts.
 
 Determinism guarantee: canonical key derivation is a pure function of the remote URL; the same repo always yields the same key on every machine.
 
 ## Roadmap
 
-- `whisper consolidate` — migrate legacy repo-key directories into the canonical key
-- `whisper doctor` — deep workspace diagnostics via `genesis::doctor`
+- `turu consolidate` — migrate legacy repo-key directories into the canonical key (detection already ships in `turu doctor`)
 
 ## License
 

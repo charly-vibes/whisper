@@ -1,6 +1,7 @@
 [package]
 name = "whisper-vibes"
-version = "0.1.0"
+version = "0.2.0"
+default-run = "turu"
 edition = "2024"
 description = "Deterministic knowledge workspace management for AI agents — the mechanical half of the whisper skill as a CLI"
 license = "MIT"
@@ -10,6 +11,16 @@ categories = ["command-line-utilities", "development-tools"]
 
 [lib]
 name = "whisper"
+
+# The main command follows the song's turututu riff. `whisper` stays as a
+# legacy alias so existing scripts and the incitaciones skill keep working.
+[[bin]]
+name = "turu"
+path = "src/main.rs"
+
+[[bin]]
+name = "turututu"
+path = "src/main.rs"
 
 [[bin]]
 name = "whisper"

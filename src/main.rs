@@ -8,7 +8,7 @@ use std::process::exit;
 
 use clap::{Parser, Subcommand};
 use genesis::guide::{CliFormat, CliVerbosity, Output, OutputFormat, Verbosity};
-use whisper::{CLI_VERSION, WhisperError, config, workspace};
+use whisper::{CLI_VERSION, WhisperError, config, doctor, workspace};
 
 thread_local! {
     static FORMAT: Cell<OutputFormat> = const { Cell::new(OutputFormat::Human) };
@@ -17,7 +17,7 @@ thread_local! {
 
 #[derive(Parser)]
 #[command(
-    name = "whisper",
+    name = env!("CARGO_BIN_NAME"),
     version = CLI_VERSION,
     about = "Deterministic knowledge workspace management for AI agents",
     after_help = genesis::guide::Verbosity::help_footer()
@@ -61,6 +61,14 @@ enum Commands {
     Status,
     /// Detect legacy key variants, undefined groups, and missing files.
     Check,
+    /// Deep workspace diagnostics (layout, groups, managed block, legacy keys).
+    Doctor,
+    /// Inject/refresh the turu managed block in the agent-facing file.
+    Sync {
+        /// Target file (default: AGENTS.md at the repo root).
+        #[arg(long)]
+        file: Option<String>,
+    },
 }
 
 fn main() {
@@ -226,6 +234,33 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                 Some("whisper init to create missing files".to_string())
             };
             (data, warnings, hint)
+        }
+        Commands::Doctor => {
+            let report = doctor::run_checks(&facts, &resolved, &cwd);
+            let hint = if report.is_healthy() {
+                "workspace is healthy".to_string()
+            } else {
+                "apply the listed fix commands, or run `turu init`".to_string()
+            };
+            let data =
+                serde_json::to_value(&report).map_err(|e| WhisperError::new(e.to_string()))?;
+            (data, vec![], Some(hint))
+        }
+        Commands::Sync { file } => {
+            let (target, outcome) =
+                workspace::agents_sync(&cwd, file.as_deref(), &facts, &resolved)?;
+            let data = serde_json::json!({
+                "target": target,
+                "outcome": outcome,
+            });
+            (
+                data,
+                vec![],
+                Some(format!(
+                    "`{}` now carries the deterministic routing map ({outcome})",
+                    target.display()
+                )),
+            )
         }
     };
 

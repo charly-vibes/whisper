@@ -1,0 +1,2 @@
+{"id":"int-42e70ba2","kind":"field_change","created_at":"2026-09-05T19:02:15.794933936Z","actor":"charly vibes","issue_id":"whisper-61k","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Filed as DDL issue in dulce-de-leche; closing this mirror."}}
+{"id":"int-8d45081b","kind":"field_change","created_at":"2026-09-05T19:02:16.266628951Z","actor":"charly vibes","issue_id":"whisper-e6t","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Implementing now: turu doctor via genesis DoctorReport."}}

@@ -6,10 +6,13 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use genesis::managed_block::{BlockDef, BlockInjector, BlockRegistry, InjectResult};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Resolved;
 use crate::{Result, WhisperError};
+
+pub const BLOCK_NAME: &str = "turu";
 
 /// Deterministic facts about the current checkout.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +113,84 @@ fn basename(p: &Path) -> String {
     p.file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| p.to_string_lossy().to_string())
+}
+
+/// Path of the agent-facing file that hosts the turu managed block:
+/// `AGENTS.md` at the repo root (falls back to cwd outside a repo).
+pub fn agents_file(repo_root: &Path) -> PathBuf {
+    git(repo_root, &["rev-parse", "--show-toplevel"])
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repo_root.to_path_buf())
+        .join("AGENTS.md")
+}
+
+/// Injector with the `turu` block registered.
+pub fn turu_injector() -> BlockInjector {
+    let mut registry = BlockRegistry::new();
+    registry.register(BlockDef::with_markers(
+        BLOCK_NAME,
+        "<!-- TURU:START -->\n",
+        "\n<!-- TURU:END -->\n",
+    ));
+    BlockInjector::new(registry)
+}
+
+/// Content of the turu managed block for the current checkout: the
+/// deterministic routing map, so agents read paths from a file instead of
+/// re-deriving them.
+pub fn managed_block_content(facts: &Facts, resolved: &Resolved) -> Result<String> {
+    let path_of = |scope| resolve(scope, facts, resolved).map(|t| t.path);
+    let fmt = |p: Result<PathBuf>| p.map(|p| format!("`{}`", p.display()));
+
+    Ok(format!(
+        "# Whisper knowledge workspace (managed by turu — regenerate with `turu sync`)\n\
+         \n\
+         - Workspace root: `{}`{}\n\
+         - Repo key: `{}` · Branch slug: `{}` · Worktree slot: `{}`\n\
+         - Deterministic routing (resolve, never guess):\n\
+           - global → {}\n\
+           - repo → {}\n\
+           - branch → {}\n\
+           - worktree → {}\n\
+         - Commands: `turu resolve <scope>` · `turu append <scope> --text ...` · `turu status` · `turu doctor`\n",
+        resolved.workspace_root.display(),
+        resolved
+            .group
+            .as_ref()
+            .map(|(n, _)| format!(" (group `{n}` active — shared scopes route there)"))
+            .unwrap_or_default(),
+        facts.repo_key,
+        facts.branch_slug,
+        facts.worktree_slot,
+        fmt(path_of(Scope::Global)).unwrap_or_else(|_| "(unavailable)".into()),
+        fmt(path_of(Scope::Repo)).unwrap_or_else(|_| "(unavailable)".into()),
+        fmt(path_of(Scope::Branch)).unwrap_or_else(|_| "(unavailable)".into()),
+        fmt(path_of(Scope::Worktree)).unwrap_or_else(|_| "(unavailable)".into()),
+    ))
+}
+
+/// Inject/refresh the turu managed block in the agent-facing file.
+/// Returns the target path and one of `created | prepended | updated`.
+pub fn agents_sync(
+    repo_root: &Path,
+    target_override: Option<&str>,
+    facts: &Facts,
+    resolved: &Resolved,
+) -> Result<(PathBuf, &'static str)> {
+    let path = match target_override {
+        Some(f) => PathBuf::from(f),
+        None => agents_file(repo_root),
+    };
+    let content = managed_block_content(facts, resolved)?;
+    let result = turu_injector()
+        .inject(&path, BLOCK_NAME, &content)
+        .map_err(WhisperError::from)?;
+    let label = match result {
+        InjectResult::Created => "created",
+        InjectResult::Prepended => "prepended",
+        InjectResult::Updated => "updated",
+    };
+    Ok((path, label))
 }
 
 /// Collect all facts for the checkout containing `dir`.

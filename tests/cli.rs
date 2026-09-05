@@ -35,8 +35,8 @@ fn git_repo(dir: &Path, remote: &str) {
 }
 
 /// Run the whisper binary with a sandboxed environment.
-fn whisper(home: &Path, cwd: &Path) -> CliCommand {
-    let mut cmd = CliCommand::cargo_bin("whisper").unwrap();
+fn turu(home: &Path, cwd: &Path) -> CliCommand {
+    let mut cmd = CliCommand::cargo_bin("turu").unwrap();
     cmd.env("HOME", home)
         .env("XDG_CONFIG_HOME", home.join(".config"))
         .current_dir(cwd);
@@ -49,14 +49,14 @@ fn key_is_deterministic_and_canonical() {
     let repo = tmp.path().join("repo");
     git_repo(&repo, "git@cv:charly-vibes/whisper.git");
 
-    whisper(tmp.path(), &repo)
+    turu(tmp.path(), &repo)
         .args(["key", "--json"])
         .assert()
         .success()
         .stdout(contains("\"cv/charly-vibes/whisper\""));
 
     // Same repo → same key, on repeat invocations.
-    whisper(tmp.path(), &repo)
+    turu(tmp.path(), &repo)
         .args(["key", "--json"])
         .assert()
         .success()
@@ -69,7 +69,7 @@ fn https_remote_maps_to_host_key() {
     let repo = tmp.path().join("repo");
     git_repo(&repo, "https://github.com/u/r.git");
 
-    whisper(tmp.path(), &repo)
+    turu(tmp.path(), &repo)
         .args(["key", "--json"])
         .assert()
         .success()
@@ -82,7 +82,7 @@ fn no_remote_falls_back_to_local_key() {
     let repo = tmp.path().join("plain");
     git_repo(&repo, "");
 
-    whisper(tmp.path(), &repo)
+    turu(tmp.path(), &repo)
         .args(["key", "--json"])
         .assert()
         .success()
@@ -95,7 +95,7 @@ fn resolve_branch_lands_under_workspace_root() {
     let repo = tmp.path().join("repo");
     git_repo(&repo, "git@cv:charly-vibes/whisper.git");
 
-    whisper(tmp.path(), &repo)
+    turu(tmp.path(), &repo)
         .args(["resolve", "branch", "--json"])
         .assert()
         .success()
@@ -110,12 +110,12 @@ fn append_creates_then_extends_verbatim() {
     let repo = tmp.path().join("repo");
     git_repo(&repo, "git@cv:charly-vibes/whisper.git");
 
-    whisper(tmp.path(), &repo)
+    turu(tmp.path(), &repo)
         .args(["append", "repo", "--text", "deploy needs vault"])
         .assert()
         .success();
 
-    whisper(tmp.path(), &repo)
+    turu(tmp.path(), &repo)
         .args(["append", "repo", "--text", "second fact"])
         .assert()
         .success();
@@ -133,18 +133,18 @@ fn init_never_overwrites() {
     let repo = tmp.path().join("repo");
     git_repo(&repo, "git@cv:charly-vibes/whisper.git");
 
-    whisper(tmp.path(), &repo)
+    turu(tmp.path(), &repo)
         .args(["init", "--json"])
         .assert()
         .success();
-    whisper(tmp.path(), &repo)
+    turu(tmp.path(), &repo)
         .args(["init", "--json"])
         .assert()
         .success();
 
     let rules = tmp.path().join(".whisper/rules.md");
     std::fs::write(&rules, "custom rules\n").unwrap();
-    whisper(tmp.path(), &repo)
+    turu(tmp.path(), &repo)
         .args(["init", "--json"])
         .assert()
         .success();
@@ -168,7 +168,7 @@ fn global_group_membership_routes_to_group_root() {
     )
     .unwrap();
 
-    whisper(tmp.path(), &repo)
+    turu(tmp.path(), &repo)
         .args(["resolve", "group", "--json"])
         .assert()
         .success()
@@ -198,7 +198,7 @@ fn repo_private_config_joins_group() {
     std::fs::create_dir_all(repo.join(".whisper")).unwrap();
     std::fs::write(repo.join(".whisper/config.toml"), "group = \"cv-tools\"\n").unwrap();
 
-    whisper(tmp.path(), &repo)
+    turu(tmp.path(), &repo)
         .args(["resolve", "group", "--json"])
         .assert()
         .success()
@@ -232,7 +232,7 @@ fn repo_private_root_override_wins() {
     )
     .unwrap();
 
-    whisper(tmp.path(), &repo)
+    turu(tmp.path(), &repo)
         .args(["resolve", "repo", "--json"])
         .assert()
         .success()
@@ -245,11 +245,61 @@ fn group_scope_without_group_fails_with_suggestion() {
     let repo = tmp.path().join("repo");
     git_repo(&repo, "git@cv:charly-vibes/whisper.git");
 
-    whisper(tmp.path(), &repo)
+    turu(tmp.path(), &repo)
         .args(["resolve", "group", "--json"])
         .assert()
         .failure()
         .stderr(contains("no group is active"));
+}
+
+#[test]
+fn sync_injects_managed_block_into_agents_md() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    // First run creates the file; second run updates in place.
+    turu(tmp.path(), &repo)
+        .args(["sync", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("\"outcome\":\"created\""));
+
+    turu(tmp.path(), &repo)
+        .args(["sync", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("\"outcome\":\"updated\""));
+
+    let agents = repo.join("AGENTS.md");
+    let content = std::fs::read_to_string(&agents).unwrap();
+    assert!(content.contains("<!-- TURU:START -->"));
+    assert!(content.contains("cv/charly-vibes/whisper"));
+    assert_eq!(content.matches("TURU:START").count(), 1);
+}
+
+#[test]
+fn doctor_reports_unhealthy_then_healthy_after_sync() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    turu(tmp.path(), &repo)
+        .args(["doctor", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("turu.managed-block"))
+        .stdout(contains("\"warn\":4"));
+
+    turu(tmp.path(), &repo).args(["init"]).assert().success();
+    turu(tmp.path(), &repo).args(["sync"]).assert().success();
+
+    turu(tmp.path(), &repo)
+        .args(["doctor", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("\"pass\":5"))
+        .stdout(contains("\"warn\":0"));
 }
 
 #[test]
@@ -258,7 +308,7 @@ fn check_flags_missing_rules_file() {
     let repo = tmp.path().join("repo");
     git_repo(&repo, "git@cv:charly-vibes/whisper.git");
 
-    whisper(tmp.path(), &repo)
+    turu(tmp.path(), &repo)
         .args(["check", "--json"])
         .assert()
         .success()
