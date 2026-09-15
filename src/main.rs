@@ -62,6 +62,8 @@ enum Commands {
     Status,
     /// Detect legacy key variants, undefined groups, and missing files.
     Check,
+    /// Migrate legacy repo-key directories into the canonical key.
+    Consolidate,
     /// Deep workspace diagnostics (layout, groups, managed block, legacy keys).
     Doctor,
     /// Inject/refresh the turu managed block in the agent-facing file.
@@ -250,6 +252,20 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                 Some("whisper init to create missing files".to_string())
             };
             (data, warnings, hint)
+        }
+        Commands::Consolidate => {
+            let report = workspace::consolidate(&facts, &resolved)?;
+            let data = serde_json::json!({
+                "canonical_dir": report.canonical_dir,
+                "variants": report.variants,
+                "moved": report.moved,
+                "merged": report.merged,
+            });
+            (
+                data,
+                vec![],
+                Some("turu doctor — the legacy-keys check must pass".to_string()),
+            )
         }
         Commands::Doctor => {
             let report = doctor::run_checks(&facts, &resolved, &cwd);

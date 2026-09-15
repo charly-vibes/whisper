@@ -400,16 +400,118 @@ pub fn legacy_variants(facts: &Facts, resolved: &Resolved) -> Vec<String> {
         if name == facts.repo_key {
             continue;
         }
-        // Legacy forms: bare name, owner-only, or alias-host with colon.
-        let colon_form = name.contains(':');
-        let base_matches =
-            name == bare_name || name.rsplit('/').next().is_some_and(|b| b == bare_name);
+        // Legacy forms: bare name, or alias-host with a matching basename
+        // (`host:name`). Colon dirs whose path doesn't end in the bare name
+        // belong to other repos — consolidate must never touch them.
+        let colon_form = name
+            .split_once(':')
+            .is_some_and(|(_, rest)| rest == bare_name);
+        let base_matches = name == bare_name;
         if colon_form || base_matches {
             variants.push(name);
         }
     }
     variants.sort();
     variants
+}
+
+/// Report of a `consolidate` migration.
+#[derive(Debug, Default, Serialize)]
+pub struct ConsolidateReport {
+    /// Legacy variant directory names that were migrated.
+    pub variants: Vec<String>,
+    /// Files/dirs moved into the canonical key without conflict.
+    pub moved: Vec<PathBuf>,
+    /// Files merged by extending (deduped lines) into existing files.
+    pub merged: Vec<PathBuf>,
+    /// The canonical repo directory everything landed in.
+    pub canonical_dir: PathBuf,
+}
+
+/// Migrate legacy repo-key directories into the canonical key dir.
+///
+/// Pure deterministic migration: when the canonical dir is absent, the
+/// legacy dir is renamed wholesale; otherwise each legacy entry is moved
+/// (no conflict) or merged by extending existing text files without
+/// duplicating lines. Legacy dirs are removed afterwards.
+pub fn consolidate(facts: &Facts, resolved: &Resolved) -> Result<ConsolidateReport> {
+    let repos_dir = resolved.knowledge_root().join("repos");
+    let canonical_dir = repos_dir.join(&facts.repo_key);
+    let variants = legacy_variants(facts, resolved);
+    let mut report = ConsolidateReport {
+        variants: variants.clone(),
+        canonical_dir,
+        ..ConsolidateReport::default()
+    };
+
+    for variant in &variants {
+        let src = repos_dir.join(variant);
+        if !report.canonical_dir.exists() {
+            std::fs::create_dir_all(
+                report
+                    .canonical_dir
+                    .parent()
+                    .ok_or_else(|| WhisperError::new("repos dir has no parent"))?,
+            )?;
+            std::fs::rename(&src, &report.canonical_dir)?;
+            report.moved.push(report.canonical_dir.clone());
+        } else {
+            merge_dir(
+                &src,
+                &report.canonical_dir,
+                &mut report.moved,
+                &mut report.merged,
+            )?;
+            std::fs::remove_dir_all(&src)?;
+        }
+    }
+    Ok(report)
+}
+
+/// Move/merge every entry of `src` into `dst`, then `src` must be empty.
+fn merge_dir(
+    src: &Path,
+    dst: &Path,
+    moved: &mut Vec<PathBuf>,
+    merged: &mut Vec<PathBuf>,
+) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            merge_dir(&from, &to, moved, merged)?;
+        } else if !to.exists() {
+            std::fs::rename(&from, &to)?;
+            moved.push(to);
+        } else {
+            merge_text_file(&from, &to)?;
+            merged.push(to);
+        }
+    }
+    Ok(())
+}
+
+/// Extend `to` with the lines of `from` that are not already present.
+fn merge_text_file(from: &Path, to: &Path) -> Result<()> {
+    let dst = std::fs::read_to_string(to)?;
+    let src = std::fs::read_to_string(from)?;
+    let existing: std::collections::HashSet<&str> = dst.lines().map(str::trim_end).collect();
+    let addition: Vec<&str> = src
+        .lines()
+        .filter(|l| !l.trim_end().is_empty() && !existing.contains(l.trim_end()))
+        .collect();
+    if !addition.is_empty() {
+        let mut out = dst.clone();
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&addition.join("\n"));
+        out.push('\n');
+        std::fs::write(to, out)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -473,6 +575,138 @@ mod tests {
         };
         let err = resolve(Scope::Group, &facts, &resolved).unwrap_err();
         assert!(err.suggestion.is_some());
+    }
+
+    fn ws_facts(repo_key: &str) -> Facts {
+        Facts {
+            repo_key: repo_key.into(),
+            branch_slug: "main".into(),
+            worktree_slot: "ws".into(),
+        }
+    }
+
+    #[test]
+    fn legacy_variants_flags_bare_and_matching_colon_forms_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        for name in ["whisper", "host:whisper", "ak:akielbowicz", "github.com"] {
+            std::fs::create_dir_all(tmp.path().join("repos").join(name)).unwrap();
+        }
+        let resolved = Resolved {
+            workspace_root: tmp.path().to_path_buf(),
+            group: None,
+        };
+
+        let variants = legacy_variants(&ws_facts("github.com/u/whisper"), &resolved);
+
+        assert_eq!(
+            variants,
+            vec!["host:whisper".to_string(), "whisper".to_string()]
+        );
+    }
+
+    #[test]
+    fn consolidate_moves_whole_dir_when_canonical_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repos = tmp.path().join("repos");
+        let legacy = repos.join("whisper");
+        std::fs::create_dir_all(legacy.join("branches/main")).unwrap();
+        std::fs::write(legacy.join("env.md"), "legacy fact\n").unwrap();
+        std::fs::write(legacy.join("branches/main/notes.md"), "note\n").unwrap();
+        let resolved = Resolved {
+            workspace_root: tmp.path().to_path_buf(),
+            group: None,
+        };
+
+        let report = consolidate(&ws_facts("github.com/u/whisper"), &resolved).unwrap();
+
+        assert_eq!(report.variants, vec!["whisper".to_string()]);
+        let canon = repos.join("github.com/u/whisper");
+        assert_eq!(
+            std::fs::read_to_string(canon.join("env.md")).unwrap(),
+            "legacy fact\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(canon.join("branches/main/notes.md")).unwrap(),
+            "note\n"
+        );
+        assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn consolidate_merges_extending_never_duplicating() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repos = tmp.path().join("repos");
+        let canon = repos.join("github.com/u/whisper");
+        let legacy = repos.join("whisper");
+        std::fs::create_dir_all(&canon).unwrap();
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(canon.join("env.md"), "shared fact\ncanonical only\n").unwrap();
+        std::fs::write(legacy.join("env.md"), "legacy only\nshared fact\n\n").unwrap();
+        let resolved = Resolved {
+            workspace_root: tmp.path().to_path_buf(),
+            group: None,
+        };
+
+        let report = consolidate(&ws_facts("github.com/u/whisper"), &resolved).unwrap();
+
+        let merged = std::fs::read_to_string(canon.join("env.md")).unwrap();
+        assert_eq!(merged, "shared fact\ncanonical only\nlegacy only\n");
+        assert_eq!(report.merged, vec![canon.join("env.md")]);
+        assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn consolidate_merges_nested_files_into_existing_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repos = tmp.path().join("repos");
+        let canon = repos.join("github.com/u/whisper");
+        let legacy = repos.join("whisper");
+        std::fs::create_dir_all(canon.join("branches/main")).unwrap();
+        std::fs::create_dir_all(legacy.join("branches/main")).unwrap();
+        std::fs::create_dir_all(legacy.join("branches/feature--x")).unwrap();
+        std::fs::write(canon.join("branches/main/notes.md"), "shared note\n").unwrap();
+        std::fs::write(
+            legacy.join("branches/main/notes.md"),
+            "shared note\nlegacy note\n",
+        )
+        .unwrap();
+        std::fs::write(
+            legacy.join("branches/feature--x/notes.md"),
+            "feature note\n",
+        )
+        .unwrap();
+        let resolved = Resolved {
+            workspace_root: tmp.path().to_path_buf(),
+            group: None,
+        };
+
+        consolidate(&ws_facts("github.com/u/whisper"), &resolved).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(canon.join("branches/main/notes.md")).unwrap(),
+            "shared note\nlegacy note\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(canon.join("branches/feature--x/notes.md")).unwrap(),
+            "feature note\n"
+        );
+        assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn consolidate_noop_without_variants() {
+        let tmp = tempfile::tempdir().unwrap();
+        let resolved = Resolved {
+            workspace_root: tmp.path().to_path_buf(),
+            group: None,
+        };
+
+        let report = consolidate(&ws_facts("github.com/u/r"), &resolved).unwrap();
+
+        assert!(report.variants.is_empty());
+        assert!(report.moved.is_empty());
+        assert!(report.merged.is_empty());
+        assert!(!tmp.path().join("repos").exists());
     }
 
     #[test]

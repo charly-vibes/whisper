@@ -25,6 +25,7 @@ Never hand-roll those paths while the binary is present.
 | Create the workspace layout | `turu init --json` |
 | Inspect paths and existence | `turu status --json` |
 | Validate / detect legacy keys | `turu check --json` · `turu doctor --json` |
+| Migrate legacy repo-key directories into the canonical key | `turu consolidate --json` |
 | Refresh the AGENTS.md routing block | `turu sync --json` |
 
    Scopes: `global` (rules.md), `repo` (env.md), `branch` (notes.md),

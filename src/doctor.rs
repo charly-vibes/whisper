@@ -112,7 +112,7 @@ pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> Docto
                     facts.repo_key
                 ),
             ),
-            "turu consolidate (pending) — migrate manually for now",
+            "turu consolidate",
         )
     });
 
