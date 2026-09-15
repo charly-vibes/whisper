@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-09-15
+
+### Added
+
+- Structured, idempotent knowledge entries (`add-entry-model`): every appended fact becomes a ledger line carrying a full sha2 id (scope + second-precision UTC + text), a timestamp, an optional `--topic` key, and mechanical `--supersedes` marking; duplicate appends are no-ops reported as `duplicate`; freeform content is preserved verbatim; `TURU_NOW` env override gives reproducible timestamps
+- `turu recall <scope> [--topic] [--budget] [--include-superseded]` (`add-recall-serving`) — ranked, whole-entry-atomic slice serving; `all` composes scopes in precedence order; the envelope reports the context-horizon boundary (`served_bytes`, `budget_unused`, `entries_skipped`, `freeform_skipped`) so the agent can decide when to load memory at all
+- `turu distill <scope> --begin|--commit --revision <id>` (`add-distill-contract`) — two-phase contract: turu snapshots the scope into immutable revisions and guards the commit against concurrent drift; the calling agent performs the semantic rewrite into the working file; replay is a reported no-op; revisions are never pruned
+- `turu bundle pack|unpack` (`add-shared-bundle`) — deterministic, transport-agnostic knowledge bundles keyed by the canonical repo key; unpack merges extend-without-duplicate and never overwrites (strategic transport fork documented as open in `openspec/changes/add-shared-bundle/design.md`)
+- doctor checks: `turu.entry-format` (unmanaged freeform lines), `turu.distill-pending` (revisions begun but not committed)
+- `openspec/` baseline specs for existing behavior (workspace-routing, knowledge-append, config-precedence, managed-block, workspace-maintenance) + lifecycle change proposals
+
+### Changed
+
+- `turu append` writes structured entry lines instead of verbatim text; appends use a single O_APPEND write so concurrent agents cannot lose each other's entries (full rewrite only for `--supersedes` marking); multi-line input is normalized (per-line leading whitespace stripped, id computed over the normalized text)
+- envelope `appended_bytes` reports the rendered line length actually written, not the raw input length
+- entry parsing requires canonical RFC-3339 seconds timestamps — malformed lines degrade to unmanaged freeform instead of corrupting recency ordering
+
 ## [0.3.0] - 2026-02-20
 
 ### Added
