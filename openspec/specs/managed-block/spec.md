@@ -16,6 +16,12 @@ Baseline spec for existing behavior: the `<!-- TURU:START -->` managed block inj
 - **THEN** the block is injected and the envelope reports the action
 - **AND** existing file content is preserved
 
+#### Scenario: Target file missing
+
+- **WHEN** the target file does not exist
+- **THEN** `turu sync` creates it containing the managed block
+- **AND** the envelope reports the action as created
+
 #### Scenario: Re-sync updates in place
 
 - **WHEN** the target file already contains a managed block and routing facts changed (e.g. new branch)

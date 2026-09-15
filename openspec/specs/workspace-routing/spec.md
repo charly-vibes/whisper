@@ -37,12 +37,18 @@ The branch slug SHALL be `git rev-parse --abbrev-ref HEAD` with `/` replaced by 
 
 ### Requirement: Worktree slot
 
-The worktree slot SHALL be the basename of the git common dir (distinguishing linked worktrees), falling back to the basename of the working directory outside a repo.
+The worktree slot SHALL be the basename of the git common dir, falling back to the basename of the working directory outside a repo. In practice the common dir basename is `.git` and is **shared by every worktree of the same repo** — the slot does not distinguish linked worktrees from the main checkout (the worktree scope's value is machine/checkout-local setup, not per-worktree identity).
 
-#### Scenario: Linked worktree
+#### Scenario: Linked worktree shares the slot
 
-- **WHEN** the checkout is a linked worktree whose common dir basename is `.git`
-- **THEN** the worktree slot is the basename of that common dir
+- **WHEN** a linked worktree and the main checkout of the same repo both resolve the worktree scope
+- **THEN** both get the same slot (basename of the shared common dir, typically `.git`)
+- **AND** their worktree env resolves to the same path
+
+#### Scenario: Bare repo
+
+- **WHEN** the checkout is a bare repo whose common dir is the bare dir itself
+- **THEN** the slot is the bare dir's basename
 
 ### Requirement: Scope resolution is exact and total
 

@@ -23,12 +23,18 @@ Configuration SHALL resolve in layers: the global file provides the default work
 
 ### Requirement: Repo config discovery walks up
 
-The repo config SHALL be discovered by walking up from the working directory to the first `.whisper/config.toml`; files above it are not consulted for repo overrides.
+The repo config SHALL be discovered by walking up **from the working directory** to the first `.whisper/config.toml`; files above that first hit are not consulted for repo overrides.
 
 #### Scenario: Config found in a parent
 
 - **WHEN** the working directory is `<repo>/src/module` and `.whisper/config.toml` exists at `<repo>/`
 - **THEN** that config is applied
+
+#### Scenario: Nested config shadows the repo root
+
+- **WHEN** `.whisper/config.toml` exists both in the current working directory's subtree root and at the repo root
+- **THEN** the first one found walking up from the working directory wins
+- **AND** the repo root's config is not consulted for that invocation
 
 ### Requirement: Global default root
 

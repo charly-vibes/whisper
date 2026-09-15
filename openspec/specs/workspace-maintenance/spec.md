@@ -54,4 +54,4 @@ Baseline spec for existing behavior: workspace lifecycle commands — `init` (ne
 #### Scenario: Check flags legacy variants
 
 - **WHEN** legacy repo-key dirs exist
-- **THEN** `turu check` reports them and suggests `turu consolidate`
+- **THEN** `turu check` reports them together with the canonical key to route new knowledge into
