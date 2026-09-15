@@ -1,0 +1,46 @@
+# CI workflow - runs the same commands as local development
+#
+# Uses `just ci` to ensure parity between local and CI environments.
+# If CI fails, run `just ci` locally to reproduce the issue.
+#
+# The build-locked step verifies Cargo.lock is in sync with Cargo.toml —
+# release.yml publishes with `cargo publish --locked`, so lockfile drift
+# must fail here before it breaks a tag push.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  ci:
+    name: Test & Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install just
+        uses: extractions/setup-just@v3
+
+      # Run the exact same command as local development
+      - name: Run CI pipeline
+        run: just ci
