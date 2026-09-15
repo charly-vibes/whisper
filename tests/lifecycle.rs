@@ -1067,6 +1067,80 @@ fn distill_commit_rejects_crafted_revision_ids() {
         .stderr(contains("invalid revision id"));
 }
 
+#[test]
+fn multi_line_text_with_leading_whitespace_normalizes_at_ingest() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    let text = "steps:\n    one indented\n        two deeper";
+
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", text, "--json"])
+        .assert()
+        .success();
+
+    let path = resolve_repo_path(&home, &repo);
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("steps:\n  one indented\n  two deeper"));
+
+    // Re-appending the same raw text is a duplicate: the id is computed
+    // over the NORMALIZED text.
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", text, "--json"])
+        .assert()
+        .stdout(contains("\"duplicate\":true"));
+}
+
+#[test]
+fn appended_bytes_reports_the_rendered_line_not_the_raw_input() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    // Raw input carries trailing whitespace that is trimmed at ingest.
+    let out = String::from_utf8(
+        turu(&home, &repo)
+            .env("TURU_NOW", "2026-01-01T00:00:00Z")
+            .args(["append", "repo", "--text", "fact with padding   ", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let reported: i64 = out
+        .split("\"appended_bytes\":")
+        .nth(1)
+        .unwrap()
+        .split(',')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let path = resolve_repo_path(&home, &repo);
+    let content = std::fs::read_to_string(&path).unwrap();
+    let line = content
+        .lines()
+        .find(|l| l.contains("fact with padding"))
+        .unwrap();
+    assert_eq!(reported as usize, line.len() + 1); // line + trailing newline
+}
+
+#[test]
+fn bundle_pack_creates_missing_parent_dirs_for_out() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "fact"])
+        .assert()
+        .success();
+    let nested = tmp.path().join("deep/nested/dir/bundle.json");
+    turu(&home, &repo)
+        .args(["bundle", "pack", "repo", "--out", nested.to_str().unwrap()])
+        .assert()
+        .success();
+    assert!(nested.exists());
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------

@@ -34,6 +34,26 @@ Entries SHALL be stored as structured markdown carrying id, timestamp, topic key
 - **THEN** append, recall, and distill operations succeed without modifying those lines
 - **AND** `turu doctor` reports them as unmanaged (warning, not error)
 
+### Requirement: Canonical timestamps gate entry parsing
+
+A ledger line SHALL parse as an entry only when its timestamp is canonical RFC-3339 seconds UTC; lines with malformed, sub-second, or offset-form timestamps SHALL be treated as unmanaged freeform so they cannot corrupt recency ordering.
+
+#### Scenario: Malformed timestamp degrades to freeform
+
+- **WHEN** a scope file contains `- banana [id:abc] text` or a sub-second timestamp line
+- **THEN** recall serves it verbatim as freeform, not as a ranked entry
+- **AND** `turu doctor` counts it as unmanaged content
+
+### Requirement: Leading whitespace normalized at ingest
+
+Appended text SHALL have per-line leading whitespace stripped at ingest, and the entry id SHALL be computed over the normalized text, so any leading-indented content round-trips through the exact-two-space continuation convention.
+
+#### Scenario: Indented multi-line text round-trips
+
+- **WHEN** multi-line text with indented lines is appended
+- **THEN** the stored entry carries the normalized text (leading whitespace stripped per line)
+- **AND** re-appending the same raw text is reported as `duplicate` (same id)
+
 ### Requirement: Mechanical supersede marking
 
 turu SHALL record a `supersedes` reference between entries without interpreting entry content.

@@ -111,6 +111,13 @@ pub enum Item {
 fn parse_entry_line(line: &str) -> Option<Entry> {
     let rest = line.strip_prefix("- ")?;
     let (ts, after) = rest.split_once(' ')?;
+    // Timestamp must be canonical RFC-3339 seconds — malformed or
+    // non-canonical lines degrade to unmanaged freeform instead of
+    // corrupting recency ordering.
+    match OffsetDateTime::parse(ts, &time::format_description::well_known::Rfc3339) {
+        Ok(dt) if dt.format(&ts_format()).is_ok_and(|f| f == ts) => {}
+        _ => return None,
+    }
     let id_tok = after.strip_prefix("[id:")?;
     let (id, after) = id_tok.split_once(']')?;
     let (topic, after) = if let Some(stripped) = after.strip_prefix(" (#") {
@@ -216,6 +223,14 @@ mod tests {
             supersedes: None,
             superseded_by: None,
         }
+    }
+
+    #[test]
+    fn malformed_ts_degrades_to_freeform() {
+        assert!(parse_entry_line("- banana [id:abc] text").is_none());
+        assert!(parse_entry_line("- 2026-13-45T99:99:99Z [id:abc] text").is_none());
+        assert!(parse_entry_line("- 2026-01-01T00:00:00.123Z [id:abc] subsecond").is_none());
+        assert!(parse_entry_line("- 2026-01-01T00:00:00Z [id:abc] ok").is_some());
     }
 
     #[test]

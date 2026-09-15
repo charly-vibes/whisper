@@ -26,4 +26,4 @@ Idempotent append covers the realistic race (two agents append the same fact in 
 
 ## Continuation lines
 
-Entry text lines fold only when the file line starts with **exactly** two spaces (the renderer's convention). Deeper indents — 4-space markdown code blocks — stay unmanaged freeform, so indented content after an entry is never absorbed and reformatted. Trade-off: entry text whose own lines begin with whitespace cannot round-trip; accepted as rarer than code-block corruption.
+Entry text lines fold only when the file line starts with **exactly** two spaces (the renderer's convention). Deeper indents — 4-space markdown code blocks — stay unmanaged freeform, so indented content after an entry is never absorbed and reformatted. The residual edge (entry text whose own lines begin with whitespace) is resolved at ingest: `append_entry` strips per-line leading whitespace and computes the id over the normalized text, so nothing that enters the ledger can break the fold rule.

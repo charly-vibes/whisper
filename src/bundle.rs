@@ -53,6 +53,11 @@ pub fn pack(
         Some(path) => {
             let bytes = serde_json::to_string_pretty(&bundle)
                 .map_err(|e| WhisperError::new(format!("serializing bundle: {e}")))?;
+            if let Some(parent) = std::path::Path::new(path).parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent).map_err(WhisperError::from)?;
+            }
             std::fs::write(path, &bytes).map_err(WhisperError::from)?;
             Ok(json!({
                 "path": path,

@@ -48,6 +48,11 @@ The byte budget SHALL apply to whole entries: an entry that does not fit is skip
 - **THEN** it is skipped whole and counted in `entries_skipped`
 - **AND** no partial entry text is served
 
+#### Scenario: Freeform line straddling the budget
+
+- **WHEN** a freeform line does not fit the remaining budget
+- **THEN** it is skipped and counted in `freeform_skipped` in the envelope
+
 ### Requirement: Context-horizon boundary reporting
 
 Recall output SHALL report the boundary explicitly — bytes served and budget unused — so the calling agent can decide to skip loading when the content fits in context.

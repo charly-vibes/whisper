@@ -266,7 +266,7 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
             let data = serde_json::json!({
                 "scope": target.scope,
                 "path": target.path,
-                "appended_bytes": if report.duplicate { 0 } else { text.len() },
+                "appended_bytes": report.bytes,
                 "id": report.id,
                 "duplicate": report.duplicate,
                 "superseded": report.superseded,

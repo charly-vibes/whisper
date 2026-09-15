@@ -296,6 +296,8 @@ pub struct AppendReport {
     pub duplicate: bool,
     /// Id of the entry that was marked superseded (when `supersedes` was given).
     pub superseded: Option<String>,
+    /// Bytes actually written (the rendered entry line, not the raw input).
+    pub bytes: usize,
 }
 
 /// Append one structured entry to a scope file: idempotent by id, with
@@ -321,8 +323,16 @@ pub fn append_entry(
             );
         }
     }
-    let text = text.trim_end();
-    let id = entry::entry_id(scope_key, ts, text);
+    // Normalize: no trailing whitespace overall, and no line may start
+    // with whitespace — continuation lines start with exactly two spaces,
+    // so leading whitespace would break the ledger round-trip.
+    let text: String = text
+        .trim_end()
+        .lines()
+        .map(|l| l.trim_start())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let id = entry::entry_id(scope_key, ts, &text);
     let raw = std::fs::read_to_string(&target.path).unwrap_or_default();
     let id_present = entry::parse_file(&raw)
         .iter()
@@ -332,6 +342,7 @@ pub fn append_entry(
             id,
             duplicate: true,
             superseded: None,
+            bytes: 0,
         });
     }
     let mut new = Entry {
@@ -361,11 +372,13 @@ pub fn append_entry(
         target.ensure().map_err(WhisperError::from)?;
         // Rewrite path (rare): concurrent appends during this window can be
         // lost — see design.md; the fast path below is the safe default.
-        std::fs::write(&target.path, entry::render_file(&items)).map_err(WhisperError::from)?;
+        let rendered = entry::render_file(&items);
+        std::fs::write(&target.path, &rendered).map_err(WhisperError::from)?;
         return Ok(AppendReport {
             id,
             duplicate: false,
             superseded: supersedes.map(str::to_string),
+            bytes: rendered.len(),
         });
     }
     // Fast path: single O_APPEND write — concurrent agents appending in the
@@ -385,6 +398,7 @@ pub fn append_entry(
         id,
         duplicate: false,
         superseded: None,
+        bytes: line.len(),
     })
 }
 
