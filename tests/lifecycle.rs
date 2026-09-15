@@ -6,6 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 use assert_cmd::Command as CliCommand;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 
 /// Create a git repo with a remote at `dir` and one commit on `main`.
@@ -246,6 +247,228 @@ fn freeform_lines_are_preserved_verbatim() {
     assert!(content.contains("## notes"));
     assert!(content.contains("- a plain bullet"));
     assert!(content.contains("a fact"));
+}
+
+// ---------------------------------------------------------------------------
+// add-recall-serving
+// ---------------------------------------------------------------------------
+
+fn seed_entries(home: &Path, repo: &Path) {
+    for (now, text, topic) in [
+        ("2026-01-01T00:00:00Z", "oldest fact", Some("infra")),
+        ("2026-01-02T00:00:00Z", "middle fact", None),
+        ("2026-01-03T00:00:00Z", "newest fact", Some("infra")),
+    ] {
+        let mut cmd = turu(home, repo);
+        cmd.env("TURU_NOW", now);
+        cmd.args(["append", "repo", "--text", text]);
+        if let Some(t) = topic {
+            cmd.args(["--topic", t]);
+        }
+        cmd.assert().success();
+    }
+}
+
+#[test]
+fn recall_ranks_newest_first_and_reports_boundary() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    seed_entries(&home, &repo);
+
+    let out = String::from_utf8(
+        turu(&home, &repo)
+            .args(["recall", "repo", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let first = out.split("\"text\":\"").nth(1).unwrap().split('"').next().unwrap();
+    assert_eq!(first, "newest fact");
+    assert!(out.contains("\"served_bytes\":"));
+    assert!(out.contains("\"budget_unused\":null"));
+    assert!(out.contains("\"scope\":\"repo\""));
+}
+
+#[test]
+fn recall_budget_is_whole_entry_atomic() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    seed_entries(&home, &repo);
+
+    let out = String::from_utf8(
+        turu(&home, &repo)
+            .args(["recall", "repo", "--budget", "120", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(out.contains("\"entries_skipped\":"));
+    assert!(!out.contains("oldest fact"), "smallest-budget slice must drop the oldest");
+    assert!(out.contains("newest fact"));
+    let unused: i64 = out
+        .split("\"budget_unused\":")
+        .nth(1)
+        .unwrap()
+        .split(',')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(unused >= 0);
+}
+
+#[test]
+fn recall_below_the_horizon_reports_unused_budget() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    seed_entries(&home, &repo);
+
+    let out = String::from_utf8(
+        turu(&home, &repo)
+            .args(["recall", "repo", "--budget", "100000", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let unused: i64 = out
+        .split("\"budget_unused\":")
+        .nth(1)
+        .unwrap()
+        .split(',')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(unused > 90_000, "everything served, budget mostly unused: {out}");
+}
+
+#[test]
+fn recall_excludes_superseded_by_default() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    seed_entries(&home, &repo);
+    let old_id = extract_id(&resolve_repo_path(&home, &repo), "oldest fact");
+
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-04T00:00:00Z")
+        .args(["append", "repo", "--text", "replacement", "--supersedes", &old_id])
+        .assert()
+        .success();
+
+    turu(&home, &repo)
+        .args(["recall", "repo", "--json"])
+        .assert()
+        .stdout(contains("replacement"))
+        .stdout(contains("oldest fact").not());
+
+    turu(&home, &repo)
+        .args(["recall", "repo", "--include-superseded", "--json"])
+        .assert()
+        .stdout(contains("oldest fact"));
+}
+
+#[test]
+fn recall_topic_filter() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    seed_entries(&home, &repo);
+
+    let out = String::from_utf8(
+        turu(&home, &repo)
+            .args(["recall", "repo", "--topic", "infra", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(out.contains("newest fact"));
+    assert!(out.contains("oldest fact"));
+    assert!(!out.contains("middle fact"));
+}
+
+#[test]
+fn recall_all_composes_in_precedence_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    seed_entries(&home, &repo);
+
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-02-01T00:00:00Z")
+        .args(["append", "global", "--text", "a global rule"])
+        .assert()
+        .success();
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-02-02T00:00:00Z")
+        .args(["append", "branch", "--text", "a branch note"])
+        .assert()
+        .success();
+
+    let out = String::from_utf8(
+        turu(&home, &repo)
+            .args(["recall", "all", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let gpos = out.find("a global rule").unwrap();
+    let rpos = out.find("oldest fact").unwrap();
+    let bpos = out.find("a branch note").unwrap();
+    assert!(gpos < rpos && rpos < bpos, "precedence: global < repo < branch; {out}");
+    assert!(out.contains("\"scope\":\"global\""));
+    assert!(out.contains("\"scope\":\"branch\""));
+}
+
+#[test]
+fn recall_serves_freeform_lines_unranked_at_the_end() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    let path = resolve_repo_path(&home, &repo);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "freeform heading\n").unwrap();
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "a fact"])
+        .assert()
+        .success();
+
+    let out = String::from_utf8(
+        turu(&home, &repo)
+            .args(["recall", "repo", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let epos = out.find("\"freeform\"").unwrap();
+    let fpos = out.find("freeform heading").unwrap();
+    let apos = out.find("a fact").unwrap();
+    assert!(apos < epos && epos < fpos, "entries first, freeform last: {out}");
+}
+
+#[test]
+fn recall_scope_enum_untouched_all_is_recall_level() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "seed"])
+        .assert()
+        .success();
+    // `all` is not a routing scope — resolve still rejects it...
+    turu(&home, &repo)
+        .args(["resolve", "all"])
+        .assert()
+        .failure()
+        .stderr(contains("unknown scope"));
+    // ...but recall accepts it.
+    turu(&home, &repo)
+        .args(["recall", "all", "--json"])
+        .assert()
+        .success();
 }
 
 // ---------------------------------------------------------------------------

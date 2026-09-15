@@ -9,7 +9,7 @@ use std::process::exit;
 
 use clap::{Parser, Subcommand};
 use genesis::guide::{CliFormat, CliVerbosity, Output, OutputFormat, Verbosity};
-use whisper::{CLI_VERSION, WhisperError, config, doctor, entry, skill_pack, workspace};
+use whisper::{CLI_VERSION, WhisperError, config, doctor, entry, recall, skill_pack, workspace};
 
 thread_local! {
     static FORMAT: Cell<OutputFormat> = const { Cell::new(OutputFormat::Human) };
@@ -61,6 +61,21 @@ enum Commands {
         /// Mark the entry with this id as superseded by the new entry.
         #[arg(long = "supersedes")]
         supersedes: Option<String>,
+    },
+    /// Serve a ranked, budget-bounded slice of a scope's entries.
+    Recall {
+        /// Scope: global | repo | branch | worktree | group | all
+        #[arg()]
+        scope: String,
+        /// Only entries with this topic key.
+        #[arg(long)]
+        topic: Option<String>,
+        /// Byte budget; whole entries only (never truncated).
+        #[arg(long)]
+        budget: Option<usize>,
+        /// Include superseded entries.
+        #[arg(long)]
+        include_superseded: bool,
     },
     /// Create the workspace layout for this checkout (never overwrites).
     Init,
@@ -220,6 +235,27 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                 None
             };
             (data, vec![], hint)
+        }
+        Commands::Recall {
+            scope,
+            topic,
+            budget,
+            include_superseded,
+        } => {
+            let recall_scope = recall::parse_recall_scope(scope)?;
+            let data = recall::recall(
+                &recall_scope,
+                &facts,
+                &resolved,
+                topic.as_deref(),
+                *budget,
+                *include_superseded,
+            )?;
+            (
+                data,
+                vec![],
+                Some("recall serves mechanically — when to load it is your policy".into()),
+            )
         }
         Commands::Init => {
             let report = workspace::init(&facts, &resolved)?;

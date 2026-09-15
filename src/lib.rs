@@ -11,6 +11,7 @@
 pub mod config;
 pub mod doctor;
 pub mod entry;
+pub mod recall;
 pub mod skill_pack;
 pub mod workspace;
 
