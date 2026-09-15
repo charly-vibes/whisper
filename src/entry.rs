@@ -154,10 +154,12 @@ pub fn parse_file(raw: &str) -> Vec<Item> {
     while let Some(line) = lines.next() {
         match parse_entry_line(line) {
             Some(mut entry) => {
-                while lines
-                    .peek()
-                    .is_some_and(|l| l.starts_with("  ") && !l.trim().is_empty())
-                {
+                // Continuation lines start with EXACTLY two spaces (the
+                // renderer's convention) — deeper indents (e.g. markdown
+                // code blocks) stay unmanaged freeform.
+                while lines.peek().is_some_and(|l| {
+                    l.starts_with("  ") && !l.starts_with("   ") && !l.trim().is_empty()
+                }) {
                     let cont = lines.next().unwrap();
                     entry.text.push('\n');
                     entry.text.push_str(cont.trim_start());

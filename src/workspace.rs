@@ -324,11 +324,10 @@ pub fn append_entry(
     let text = text.trim_end();
     let id = entry::entry_id(scope_key, ts, text);
     let raw = std::fs::read_to_string(&target.path).unwrap_or_default();
-    let mut items = entry::parse_file(&raw);
-    if items
+    let id_present = entry::parse_file(&raw)
         .iter()
-        .any(|i| matches!(i, Item::Entry(e) if e.id == id))
-    {
+        .any(|i| matches!(i, Item::Entry(e) if e.id == id));
+    if id_present {
         return Ok(AppendReport {
             id,
             duplicate: true,
@@ -344,6 +343,7 @@ pub fn append_entry(
         superseded_by: None,
     };
     if let Some(sup) = supersedes {
+        let mut items = entry::parse_file(&raw);
         match items
             .iter_mut()
             .find(|i| matches!(i, Item::Entry(e) if e.id == sup))
@@ -357,14 +357,34 @@ pub fn append_entry(
             }
         }
         new.supersedes = Some(sup.to_string());
+        items.push(Item::Entry(new));
+        target.ensure().map_err(WhisperError::from)?;
+        // Rewrite path (rare): concurrent appends during this window can be
+        // lost — see design.md; the fast path below is the safe default.
+        std::fs::write(&target.path, entry::render_file(&items)).map_err(WhisperError::from)?;
+        return Ok(AppendReport {
+            id,
+            duplicate: false,
+            superseded: supersedes.map(str::to_string),
+        });
     }
-    items.push(Item::Entry(new));
+    // Fast path: single O_APPEND write — concurrent agents appending in the
+    // same window cannot lose each other's entries.
     target.ensure().map_err(WhisperError::from)?;
-    std::fs::write(&target.path, entry::render_file(&items)).map_err(WhisperError::from)?;
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&target.path)
+        .map_err(WhisperError::from)?;
+    let mut line = entry::render_file(&[Item::Entry(new)]);
+    if !raw.is_empty() && !raw.ends_with('\n') {
+        line.insert(0, '\n');
+    }
+    f.write_all(line.as_bytes()).map_err(WhisperError::from)?;
     Ok(AppendReport {
         id,
         duplicate: false,
-        superseded: supersedes.map(str::to_string),
+        superseded: None,
     })
 }
 

@@ -946,6 +946,127 @@ fn bundle_pack_group_without_active_group_fails() {
         .stderr(contains("no group is active"));
 }
 
+#[test]
+fn append_fast_path_preserves_file_bytes_verbatim() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    let path = resolve_repo_path(&home, &repo);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    // Legacy file with non-canonical content (odd id width, no trailing newline).
+    std::fs::write(&path, "- 2026-01-01T00:00:00Z [id:short] legacy weird").unwrap();
+    let before = std::fs::read(&path).unwrap();
+
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-02T00:00:00Z")
+        .args(["append", "repo", "--text", "new fact"])
+        .assert()
+        .success();
+
+    let after = std::fs::read(&path).unwrap();
+    // Fast path: pure O_APPEND — the original bytes must be untouched.
+    assert_eq!(&after[..before.len()], &before[..]);
+    assert!(after.ends_with(b"new fact\n"));
+}
+
+#[test]
+fn code_blocks_after_entries_are_not_absorbed_as_continuations() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    let path = resolve_repo_path(&home, &repo);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "first"])
+        .assert()
+        .success();
+    let entry_len = std::fs::read_to_string(&path).unwrap().len();
+    std::fs::write(
+        &path,
+        format!(
+            "{}\n    let x = indented_code();\n",
+            std::fs::read_to_string(&path).unwrap().trim_end()
+        ),
+    )
+    .unwrap();
+    let with_code = std::fs::read_to_string(&path).unwrap();
+    assert!(with_code[entry_len..].starts_with("    let"));
+
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-02T00:00:00Z")
+        .args(["append", "repo", "--text", "second"])
+        .assert()
+        .success();
+
+    let after = std::fs::read_to_string(&path).unwrap();
+    // The 4-space code line survives verbatim (not folded into the entry).
+    assert!(after.contains("    let x = indented_code();"));
+}
+
+#[test]
+fn recall_group_without_active_group_propagates_the_resolve_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    turu(&home, &repo)
+        .args(["recall", "group"])
+        .assert()
+        .failure()
+        .stderr(contains("no group is active"));
+}
+
+#[test]
+fn recall_reports_freeform_lines_skipped_by_budget() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    let path = resolve_repo_path(&home, &repo);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "a fact"])
+        .assert()
+        .success();
+    std::fs::write(
+        &path,
+        format!(
+            "{}some freeform line\n",
+            std::fs::read_to_string(&path).unwrap()
+        ),
+    )
+    .unwrap();
+
+    // Budget fits the entry (~99 bytes) but not the freeform line (+19).
+    let out = String::from_utf8(
+        turu(&home, &repo)
+            .args(["recall", "repo", "--budget", "110", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(out.contains("\"freeform_skipped\":1"), "{out}");
+}
+
+#[test]
+fn distill_commit_rejects_crafted_revision_ids() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "fact"])
+        .assert()
+        .success();
+    turu(&home, &repo)
+        .args([
+            "distill",
+            "repo",
+            "--commit",
+            "--revision",
+            "../../evil-12345678",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("invalid revision id"));
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------

@@ -111,6 +111,14 @@ fn load_meta(
 /// `turu distill <scope> --commit --revision <id>`: install the distilled
 /// output only if the live files are unchanged since `--begin`.
 pub fn commit(target: &Target, revision: &str) -> Result<CommitReport> {
+    if !valid_revision_id(revision) {
+        return Err(WhisperError::new(format!(
+            "invalid revision id: {revision}"
+        ))
+        .with_suggestion(
+            "revision ids look like 20260105T000000Z-1a2b3c4d — take them from the --begin envelope",
+        ));
+    }
     let rev_dir = target
         .path
         .parent()
@@ -182,6 +190,18 @@ pub fn commit(target: &Target, revision: &str) -> Result<CommitReport> {
         snapshot_path,
         noop: false,
     })
+}
+
+/// Strict revision-id grammar: `<compact-timestamp>-<8 hex>` — also closes
+/// path traversal via a crafted --revision.
+fn valid_revision_id(rev: &str) -> bool {
+    let Some((ts, hash)) = rev.split_once('-') else {
+        return false;
+    };
+    !ts.is_empty()
+        && ts.chars().all(|c| c.is_ascii_alphanumeric())
+        && hash.len() == 8
+        && hash.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// Doctor helper: revisions begun but not committed (informational).

@@ -10,7 +10,7 @@ A pure binary cannot summarize text — semantic distillation is the skill's jud
 
 ## Conflict detection
 
-`--commit` re-hashes the live files; any drift since `--begin` (e.g. a concurrent `turu append` during the rewrite) aborts the commit with a `next_step` suggesting re-running `--begin`. Overwrite-on-drift is the failure mode this contract exists to prevent (EDGE-001).
+`--commit` re-hashes the live files; any drift since `--begin` (e.g. a concurrent `turu append` during the rewrite) aborts the commit with a `next_step` suggesting re-running `--begin`. Overwrite-on-drift is the failure mode this contract exists to prevent (EDGE-001). The `--revision` argument is validated against a strict grammar (`<compact-timestamp>-<8 hex>`), which also closes path traversal via a crafted revision id.
 
 ## Install semantics
 

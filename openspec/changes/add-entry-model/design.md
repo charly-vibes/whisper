@@ -22,4 +22,8 @@ Lines without the id marker are treated as unmanaged text: doctor warns, recall/
 
 ## Concurrency
 
-Idempotent append covers the realistic race (two agents append the same fact in the same second). Full file locking is out of scope — noted as a follow-up if multi-writer usage materializes.
+Idempotent append covers the realistic race (two agents append the same fact in the same second). Appends use a **fast path** — a single O_APPEND write of the rendered entry line — so concurrent writers cannot lose each other's entries. Only the rare `--supersedes` marking rewrites the whole file (it must mutate a line in place); during that window a concurrent append can be lost. Accepted residual risk: marking is an explicit, rare operation.
+
+## Continuation lines
+
+Entry text lines fold only when the file line starts with **exactly** two spaces (the renderer's convention). Deeper indents — 4-space markdown code blocks — stay unmanaged freeform, so indented content after an entry is never absorbed and reformatted. Trade-off: entry text whose own lines begin with whitespace cannot round-trip; accepted as rarer than code-block corruption.

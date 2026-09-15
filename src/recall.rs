@@ -71,15 +71,23 @@ pub fn recall(
     let mut lines: Vec<ServedLine> = Vec::new();
     let mut served_bytes = 0usize;
     let mut entries_skipped = 0usize;
+    let mut freeform_skipped = 0usize;
 
     for scope in scope_order(recall_scope, resolved) {
-        let target = match workspace::resolve(scope, facts, resolved) {
-            Ok(t) => t,
-            Err(_) => continue, // e.g. `all` with no active group
+        // One-scope recall surfaces resolve errors (e.g. `group` with no
+        // active group — same contract as bundle pack); `all` skips scopes
+        // that cannot resolve (e.g. no group) and keeps composing.
+        let target = match recall_scope {
+            RecallScope::One(_) => workspace::resolve(scope, facts, resolved)?,
+            RecallScope::All => match workspace::resolve(scope, facts, resolved) {
+                Ok(t) => t,
+                Err(_) => continue,
+            },
         };
         let raw = match std::fs::read_to_string(&target.path) {
             Ok(raw) => raw,
-            Err(_) => continue, // scope file not created yet
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(WhisperError::from(e)),
         };
         let scope_name = scope_name(scope);
 
@@ -116,7 +124,7 @@ pub fn recall(
         for l in freeform {
             let cost = l.len() + 1;
             match budget {
-                Some(b) if served_bytes + cost > b => {}
+                Some(b) if served_bytes + cost > b => freeform_skipped += 1,
                 _ => {
                     served_bytes += cost;
                     lines.push(ServedLine {
@@ -144,6 +152,7 @@ pub fn recall(
         "served_bytes": served_bytes,
         "budget_unused": budget.map(|b| b.saturating_sub(served_bytes)),
         "entries_skipped": entries_skipped,
+        "freeform_skipped": freeform_skipped,
     }))
 }
 
