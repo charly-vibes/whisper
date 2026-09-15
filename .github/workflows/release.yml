@@ -88,11 +88,10 @@ jobs:
 
       - name: Stage binaries
         run: |
-          for platform in darwin_amd64 darwin_arm64; do
-            mkdir -p "bins/${platform}"
-            for bin in turu turututu whisper; do
-              cp "target/${platform}_apple-darwin/release/${bin}" "bins/${platform}/${bin}"
-            done
+          mkdir -p bins/darwin_amd64 bins/darwin_arm64
+          for bin in turu turututu whisper; do
+            cp target/x86_64-apple-darwin/release/${bin} bins/darwin_amd64/${bin}
+            cp target/aarch64-apple-darwin/release/${bin} bins/darwin_arm64/${bin}
           done
 
       - uses: actions/upload-artifact@v4
