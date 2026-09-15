@@ -808,6 +808,145 @@ fn distill_commit_replay_is_a_noop() {
 }
 
 // ---------------------------------------------------------------------------
+// add-shared-bundle
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bundle_pack_is_byte_deterministic() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    seed_entries(&home, &repo);
+    let out1 = tmp.path().join("b1.json");
+    let out2 = tmp.path().join("b2.json");
+    for out in [&out1, &out2] {
+        turu(&home, &repo)
+            .args([
+                "bundle",
+                "pack",
+                "repo",
+                "--out",
+                out.to_str().unwrap(),
+                "--json",
+            ])
+            .assert()
+            .success();
+    }
+    assert_eq!(
+        std::fs::read(&out1).unwrap(),
+        std::fs::read(&out2).unwrap(),
+        "identical state must pack to identical bytes"
+    );
+}
+
+#[test]
+fn bundle_roundtrip_into_a_fresh_workspace_keeps_ids() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    seed_entries(&home, &repo);
+    let bundle_path = tmp.path().join("bundle.json");
+    turu(&home, &repo)
+        .args([
+            "bundle",
+            "pack",
+            "repo",
+            "--out",
+            bundle_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Fresh workspace: a different repo with no entries.
+    let repo_b = tmp.path().join("repo-b");
+    git_repo(&repo_b, "git@github.com:other/repo-b.git");
+    let home_b = tmp.path().join("home-b");
+    std::fs::create_dir_all(&home_b).unwrap();
+
+    turu(&home_b, &repo_b)
+        .args([
+            "bundle",
+            "unpack",
+            "--file",
+            bundle_path.to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(contains("\"added\":3"))
+        .stdout(contains("\"duplicates_skipped\":0"));
+
+    // Same entry ids after the round trip.
+    let path_b = resolve_repo_path(&home_b, &repo_b);
+    let content_b = std::fs::read_to_string(&path_b).unwrap();
+    for text in ["oldest fact", "middle fact", "newest fact"] {
+        let id_a = extract_id(&resolve_repo_path(&home, &repo), text);
+        let line_b = content_b.lines().find(|l| l.contains(text)).unwrap();
+        assert!(line_b.contains(&id_a), "entry id preserved for {text}");
+    }
+}
+
+#[test]
+fn bundle_unpack_is_extend_only_and_skips_duplicates() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    seed_entries(&home, &repo);
+    let bundle_path = tmp.path().join("bundle.json");
+    turu(&home, &repo)
+        .args([
+            "bundle",
+            "pack",
+            "repo",
+            "--out",
+            bundle_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Add local-only content, then unpack the bundle over it.
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-03-01T00:00:00Z")
+        .args(["append", "repo", "--text", "local only fact"])
+        .assert()
+        .success();
+    let target = resolve_repo_path(&home, &repo);
+    let before = std::fs::read_to_string(&target).unwrap();
+
+    let out = String::from_utf8(
+        turu(&home, &repo)
+            .args([
+                "bundle",
+                "unpack",
+                "--file",
+                bundle_path.to_str().unwrap(),
+                "--json",
+            ])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(out.contains("\"added\":0"));
+    assert!(out.contains("\"duplicates_skipped\":3"));
+
+    let after = std::fs::read_to_string(&target).unwrap();
+    assert_eq!(
+        before, after,
+        "unpack with only duplicates must not rewrite"
+    );
+    assert!(after.contains("local only fact"));
+}
+
+#[test]
+fn bundle_pack_group_without_active_group_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    turu(&home, &repo)
+        .args(["bundle", "pack", "group"])
+        .assert()
+        .failure()
+        .stderr(contains("no group is active"));
+}
+
+// ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
 

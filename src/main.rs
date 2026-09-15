@@ -10,7 +10,8 @@ use std::process::exit;
 use clap::{Parser, Subcommand};
 use genesis::guide::{CliFormat, CliVerbosity, Output, OutputFormat, Verbosity};
 use whisper::{
-    CLI_VERSION, WhisperError, config, distill, doctor, entry, recall, skill_pack, workspace,
+    CLI_VERSION, WhisperError, bundle, config, distill, doctor, entry, recall, skill_pack,
+    workspace,
 };
 
 thread_local! {
@@ -94,6 +95,11 @@ enum Commands {
         #[arg(long)]
         revision: Option<String>,
     },
+    /// Transport-agnostic knowledge bundles (pack / unpack).
+    Bundle {
+        #[command(subcommand)]
+        command: BundleCommand,
+    },
     /// Create the workspace layout for this checkout (never overwrites).
     Init,
     /// One envelope with every relevant path and existence flag.
@@ -114,6 +120,28 @@ enum Commands {
     Skill {
         #[command(subcommand)]
         command: SkillCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum BundleCommand {
+    /// Pack a scope into a deterministic bundle (keyed by repo key).
+    Pack {
+        /// Scope: global | repo | branch | worktree | group
+        #[arg()]
+        scope: String,
+        /// Write the bundle to this file (deterministic bytes); default: envelope.
+        #[arg(long)]
+        out: Option<String>,
+    },
+    /// Merge a bundle into the local workspace (extend, never overwrite).
+    Unpack {
+        /// Bundle file to merge.
+        #[arg(long)]
+        file: Option<String>,
+        /// Read the bundle from stdin instead of --file.
+        #[arg(long)]
+        stdin: bool,
     },
 }
 
@@ -326,6 +354,26 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                 )
             }
         }
+        Commands::Bundle { command } => match command {
+            BundleCommand::Pack { scope, out } => {
+                let scope: workspace::Scope = scope.parse()?;
+                let data = bundle::pack(scope, &facts, &resolved, out.as_deref())?;
+                (
+                    data,
+                    vec![],
+                    Some("bundle is transport-agnostic — move it however you decide".into()),
+                )
+            }
+            BundleCommand::Unpack { file, stdin } => {
+                let input = bundle::read_input(file.as_deref(), *stdin)?;
+                let data = bundle::unpack(&input, &facts, &resolved)?;
+                (
+                    data,
+                    vec![],
+                    Some("merge is extend-only — existing content untouched".into()),
+                )
+            }
+        },
         Commands::Init => {
             let report = workspace::init(&facts, &resolved)?;
             let data = serde_json::json!({

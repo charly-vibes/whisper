@@ -61,7 +61,7 @@ pub fn entry_id(scope_key: &str, ts: &str, text: &str) -> String {
 }
 
 /// A parsed structured entry.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Entry {
     pub ts: String,
     pub id: String,

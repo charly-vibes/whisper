@@ -18,7 +18,10 @@ Part of the [charly-vibes](https://github.com/charly-vibes) tool suite; built on
 
 - `turu key` — canonical repo key, branch slug, and worktree slot for the current checkout (the pure determinism core)
 - `turu resolve <scope>` — the exact destination path for a knowledge scope: `global`, `repo`, `branch`, `worktree`, or `group`
-- `turu append <scope> --text "..."` — extend-don't-duplicate writes into the right file, creating parents as needed
+- `turu append <scope> --text "..." [--topic k] [--supersedes id]` — structured, idempotent entries (sha2 ids over scope + second-precision UTC + text) written into the right file; freeform content preserved verbatim
+- `turu recall <scope> [--topic k] [--budget bytes] [--include-superseded]` — ranked, budget-bounded slice serving (`all` composes scopes in precedence order); the envelope reports the context-horizon boundary (`served_bytes`, `budget_unused`, `entries_skipped`)
+- `turu distill <scope> --begin|--commit --revision id` — two-phase contract: turu snapshots into immutable revisions and guards the commit against concurrent drift; the calling agent does the semantic rewrite into the working file
+- `turu bundle pack|unpack` — deterministic, transport-agnostic knowledge bundles keyed by repo key; unpack merges extend-without-duplicate and never overwrites
 - `turu init` — create the workspace layout
 - `turu status` — one envelope with every relevant path and existence flag
 - `turu check` — detect legacy key variants, undefined groups, missing files
@@ -71,6 +74,7 @@ The distilled whisper skill in incitantes replaces its shell-snippet procedures 
 turu key        # derive repo key / branch slug / worktree slot
 turu resolve branch
 turu append repo --text "deploy requires vault login"
+turu recall repo --topic deploy --budget 400   # slice, newest first, boundary reported
 ```
 
 Agents in any repo with a `TURU` managed block read the routing map straight from `AGENTS.md` — no prompt bookkeeping required. `turu sync` refreshes the block; `turu doctor` flags it when it drifts.
