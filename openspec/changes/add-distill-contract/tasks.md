@@ -10,6 +10,7 @@
 - [ ] 2.1 RED/GREEN: agent writes distilled output to the working path; `turu distill <scope> --commit --revision <id>` atomically replaces the live file and reports revision id, files replaced, snapshot path
 - [ ] 2.2 RED/GREEN: live file changed since `--begin` (e.g. concurrent append) → commit fails with conflict error + next-step suggestion; live file untouched
 - [ ] 2.3 RED/GREEN: committing a revision twice with no drift is a no-op reported in the envelope
+- [ ] 2.4 RED/GREEN: `--commit` with no working file written fails (error names the missing path); nothing installed, revision retained
 
 ## 3. Freeform passthrough (TDD: red→green)
 

@@ -6,7 +6,7 @@ A pure binary cannot summarize text — semantic distillation is the skill's jud
 
 ## Revision model
 
-`--begin` copies the scope's files to `revisions/<utc-timestamp>-<hash-prefix>/` inside the scope's directory tree, recording: revision id, per-file sha2, and the working paths returned in the envelope. Snapshots are immutable: `--commit` never touches them, and a second distill creates a new revision dir. Rejected alternative: git commits inside `~/.whisper` (workspace is not required to be a git repo; keep zero-git assumption).
+`--begin` copies the scope's files to `revisions/<utc-timestamp>-<hash-prefix>/` inside the scope's directory tree, recording: revision id, per-file sha2, and the working paths returned in the envelope. - Revisions are immutable: `--commit` never touches them, and a second distill creates a new revision dir. Revision location is uniform: `revisions/` next to the scope's target file (so `global` → `<workspace-root>/revisions/`, repo → `repos/<key>/revisions/`, etc.). Rejected alternative: git commits inside `~/.whisper` (workspace is not required to be a git repo; keep zero-git assumption).
 
 ## Conflict detection
 

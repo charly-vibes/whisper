@@ -4,7 +4,7 @@
 
 ### Requirement: Scoped slice serving
 
-`turu recall <scope>` SHALL serve entries from one or more scopes ranked by recency (newest first), filtered by topic, and bounded by a byte budget, through the genesis envelope.
+`turu recall <scope>` SHALL serve entries from one or more scopes ranked by recency (newest first), filtered by topic, and bounded by a byte budget, through the genesis envelope. `<scope>` SHALL accept the five routing scopes plus `all` — a composition of every applicable scope in precedence order; `all` is a recall argument, not a routing scope.
 
 #### Scenario: Budget-bounded recall
 
@@ -17,6 +17,17 @@
 - **WHEN** `turu recall branch --topic infra` is run
 - **THEN** only entries whose topic key is `infra` are served
 
+#### Scenario: All-scope composition
+
+- **WHEN** `turu recall all` is run
+- **THEN** entries from every applicable scope are served in precedence order
+- **AND** the routing `Scope` enum is unchanged (`all` is not added to it)
+
+#### Scenario: Freeform lines pass through unranked
+
+- **WHEN** the scope file contains legacy freeform lines without ids
+- **THEN** they are served verbatim after all ranked entries
+
 ### Requirement: Superseded entries excluded by default
 
 Recall SHALL exclude superseded entries unless explicitly opted in.
@@ -26,6 +37,16 @@ Recall SHALL exclude superseded entries unless explicitly opted in.
 - **WHEN** entry B supersedes entry A and recall runs without flags
 - **THEN** A is not served
 - **AND** `turu recall --include-superseded` serves both
+
+### Requirement: Whole-entry budget atomicity
+
+The byte budget SHALL apply to whole entries: an entry that does not fit is skipped in its entirety, never truncated.
+
+#### Scenario: Entry straddling the budget
+
+- **WHEN** the next-ranked entry does not fit the remaining budget
+- **THEN** it is skipped whole and counted in `entries_skipped`
+- **AND** no partial entry text is served
 
 ### Requirement: Context-horizon boundary reporting
 

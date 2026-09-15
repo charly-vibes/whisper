@@ -15,8 +15,8 @@ This mirrors how the AGENTS.md managed block already works — turu owns format 
 - New two-phase command `turu distill <scope>`:
   - `--begin` snapshots the scope's current state (hash + copy), returns the working paths and the snapshot hash in the envelope.
   - The calling agent performs the semantic rewrite into the working path.
-  - `--commit --revision <id>` installs the distilled result **only if** the live files are unchanged since `--begin` (hash check); on drift it refuses with a conflict suggestion and nothing is overwritten.
-- Revisions are retained: two consecutive distills produce two distinct snapshots; turu never deletes a revision.
+  - `--commit --revision <id>` installs the distilled result **only if** the live files are unchanged since `--begin` (hash check); on drift — or if the agent never wrote the working file — it refuses with a conflict suggestion and nothing is overwritten.
+- Revisions are retained: two consecutive distills produce two distinct snapshots; turu never deletes a revision. Revisions live **next to the scope's target file** (`<target-dir>/revisions/`), uniformly for every scope including `global`.
 - Purge of old revisions is out of scope (a later change may add age-based pruning; never by default).
 
 ## Capability

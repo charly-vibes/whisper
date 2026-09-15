@@ -24,6 +24,12 @@
 - **THEN** `--commit` fails with a conflict error and a next-step suggestion
 - **AND** no live file is modified
 
+#### Scenario: Commit without a working file
+
+- **WHEN** `--commit` runs and the agent never wrote the working path
+- **THEN** the commit fails with an error naming the missing working file
+- **AND** no live file is modified and the revision is retained
+
 ### Requirement: Immutable revisions
 
 Pre-distill snapshots SHALL be retained: never deleted, never modified by later distill operations, and never pruned by default.

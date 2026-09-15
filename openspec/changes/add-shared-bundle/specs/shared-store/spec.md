@@ -35,3 +35,8 @@ The bundle format SHALL make no assumption about transport; how bundles travel b
 - **WHEN** a bundle is produced
 - **THEN** it contains only knowledge content and addressing (repo key, scope, entry ids)
 - **AND** no transport-specific fields are required to unpack it
+
+#### Scenario: Pack group scope with no active group
+
+- **WHEN** `turu bundle pack group` runs while no group is active for this repo
+- **THEN** the command fails with the same error and suggestion as `turu resolve group`

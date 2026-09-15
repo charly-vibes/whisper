@@ -11,7 +11,9 @@ The memory-systems analysis (Rule-of-5 review, DRAFT-003, EXCL-001) shows whispe
 ## What Changes
 
 - New command `turu recall <scope>` serving **slices** of a scope's entries, filtered by `--topic`, bounded by `--budget` (bytes), ranked by recency, excluding superseded entries by default.
+- `<scope>` accepts the five routing scopes **plus `all`** — a recall-level composition of every applicable scope in precedence order (`all` is a recall argument, not a new `Scope`; the `Scope` parser is untouched).
 - The envelope reports the context-horizon boundary explicitly: bytes served, budget unused, entries skipped — so the calling agent can decide to skip loading entirely when content fits.
+- Budget is **whole-entry atomic**: an entry that doesn't fit is skipped whole, never truncated mid-line.
 - When recall spans multiple scopes, deterministic precedence (global < group < repo < branch < worktree) is reported per entry in the envelope — the agent never guesses which note wins.
 - **Policy stays agent-owned**: turu serves mechanically (filter, rank, budget); *when* to call recall remains the agent's decision. This preserves the deterministic-half boundary.
 

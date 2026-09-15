@@ -28,3 +28,18 @@
 - TDD + Tidy First: each ticket maps to a red→green→refactor cycle; refactoring tasks are separate tickets from feature tasks.
 - `just build` / `just test` / `just lint` (clippy `-D warnings`).
 - Integration tests via `assert_cmd` + `predicates` + `tempfile` in `tests/`.
+
+## Change Proposals (memory lifecycle)
+
+From the memory-systems analysis (conference corpus on agent memory): whisper is a
+**Record-only** tool today; the proposals fill the remaining lifecycle stages.
+Order matters — entry-model is the substrate for the rest.
+
+| Change | Stage | Depends on |
+|---|---|---|
+| `add-entry-model` | Manage | — |
+| `add-recall-serving` | Recall | entry-model |
+| `add-distill-contract` | Distill | entry-model |
+| `add-shared-bundle` | Share | entry-model (transport fork open — see its design.md) |
+
+Boundary rule: turu owns the mechanics of every stage; the skill/LLM owns judgment.
