@@ -10,6 +10,7 @@ use genesis::managed_block::{BlockDef, BlockInjector, BlockRegistry, InjectResul
 use serde::{Deserialize, Serialize};
 
 use crate::config::Resolved;
+use crate::entry::{self, Entry, Item};
 use crate::{Result, WhisperError};
 
 pub const BLOCK_NAME: &str = "turu";
@@ -156,7 +157,7 @@ pub fn managed_block_content(facts: &Facts, resolved: &Resolved) -> Result<Strin
            - repo → {}\n\
            - branch → {}\n\
            - worktree → {}\n\
-         - Commands: `turu resolve <scope>` · `turu append <scope> --text ...` · `turu status` · `turu doctor`\n",
+         - Commands: `turu resolve <scope>` · `turu append <scope> --text ... [--topic k] [--supersedes id]` · `turu recall <scope> [--topic k] [--budget bytes]` · `turu distill <scope> --begin|--commit` · `turu bundle pack|unpack` · `turu status` · `turu doctor`\n",
         resolved.workspace_root.display(),
         resolved
             .group
@@ -271,6 +272,100 @@ impl Target {
         writeln!(f, "{trimmed}")?;
         Ok(())
     }
+}
+
+/// Deterministic scope key used in entry-id hashing, so identical text in
+/// different scopes (or branches) never collides.
+pub fn scope_key(scope: Scope, facts: &Facts, resolved: &Resolved) -> String {
+    match scope {
+        Scope::Global => "global".to_string(),
+        Scope::Repo => facts.repo_key.clone(),
+        Scope::Branch => format!("{}/{}", facts.repo_key, facts.branch_slug),
+        Scope::Worktree => format!("{}/{}", facts.repo_key, facts.worktree_slot),
+        Scope::Group => match &resolved.group {
+            Some((name, _)) => format!("group:{name}/{}", facts.repo_key),
+            None => facts.repo_key.clone(), // unreachable: resolve() errors first
+        },
+    }
+}
+
+/// Result of an entry append.
+#[derive(Debug, Serialize)]
+pub struct AppendReport {
+    pub id: String,
+    pub duplicate: bool,
+    /// Id of the entry that was marked superseded (when `supersedes` was given).
+    pub superseded: Option<String>,
+}
+
+/// Append one structured entry to a scope file: idempotent by id, with
+/// mechanical supersede marking. Unmanaged freeform lines are preserved
+/// verbatim in their original order.
+pub fn append_entry(
+    target: &Target,
+    scope_key: &str,
+    text: &str,
+    topic: Option<&str>,
+    supersedes: Option<&str>,
+    ts: &str,
+) -> Result<AppendReport> {
+    if let Some(t) = topic {
+        let invalid = t.is_empty()
+            || t.chars()
+                .any(|c| c.is_whitespace() || c == '(' || c == ')' || c == '#');
+        if invalid {
+            return Err(
+                WhisperError::new(format!("invalid topic '{t}'")).with_suggestion(
+                    "topics are bare keys like 'infra' — no whitespace, parens, or '#'",
+                ),
+            );
+        }
+    }
+    let text = text.trim_end();
+    let id = entry::entry_id(scope_key, ts, text);
+    let raw = std::fs::read_to_string(&target.path).unwrap_or_default();
+    let mut items = entry::parse_file(&raw);
+    if items
+        .iter()
+        .any(|i| matches!(i, Item::Entry(e) if e.id == id))
+    {
+        return Ok(AppendReport {
+            id,
+            duplicate: true,
+            superseded: None,
+        });
+    }
+    let mut new = Entry {
+        ts: ts.to_string(),
+        id: id.clone(),
+        topic: topic.map(str::to_string),
+        text: text.to_string(),
+        supersedes: None,
+        superseded_by: None,
+    };
+    if let Some(sup) = supersedes {
+        match items
+            .iter_mut()
+            .find(|i| matches!(i, Item::Entry(e) if e.id == sup))
+        {
+            Some(Item::Entry(e)) => e.superseded_by = Some(id.clone()),
+            _ => {
+                return Err(WhisperError::new(format!(
+                    "supersedes target not found in this scope: {sup}"
+                ))
+                .with_suggestion("turu recall <scope> --include-superseded to list entry ids"));
+            }
+        }
+        new.supersedes = Some(sup.to_string());
+    }
+    items.push(Item::Entry(new));
+    target.ensure().map_err(WhisperError::from)?;
+    std::fs::write(&target.path, entry::render_file(&items)).map_err(WhisperError::from)?;
+    Ok(AppendReport {
+        id,
+        duplicate: false,
+        superseded: supersedes.map(str::to_string),
+    })
 }
 
 /// Resolve a scope to its exact destination path.

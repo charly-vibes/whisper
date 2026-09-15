@@ -9,7 +9,7 @@ use std::process::exit;
 
 use clap::{Parser, Subcommand};
 use genesis::guide::{CliFormat, CliVerbosity, Output, OutputFormat, Verbosity};
-use whisper::{CLI_VERSION, WhisperError, config, doctor, skill_pack, workspace};
+use whisper::{CLI_VERSION, WhisperError, config, doctor, entry, skill_pack, workspace};
 
 thread_local! {
     static FORMAT: Cell<OutputFormat> = const { Cell::new(OutputFormat::Human) };
@@ -55,6 +55,12 @@ enum Commands {
         /// Read the text from stdin instead of --text.
         #[arg(long)]
         stdin: bool,
+        /// Optional topic key (bare word, no whitespace/parens/#).
+        #[arg(long)]
+        topic: Option<String>,
+        /// Mark the entry with this id as superseded by the new entry.
+        #[arg(long = "supersedes")]
+        supersedes: Option<String>,
     },
     /// Create the workspace layout for this checkout (never overwrites).
     Init,
@@ -178,6 +184,8 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
             scope,
             texts,
             stdin,
+            topic,
+            supersedes,
         } => {
             let scope: workspace::Scope = scope.parse()?;
             let text = collect_text(texts, *stdin)?;
@@ -186,13 +194,32 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                     .with_suggestion("pass --text \"...\" or --stdin"));
             }
             let target = workspace::resolve(scope, &facts, &resolved)?;
-            target.append(&text).map_err(WhisperError::from)?;
+            let ts = entry::parse_or_now(std::env::var("TURU_NOW").ok().as_deref())?;
+            let report = workspace::append_entry(
+                &target,
+                &workspace::scope_key(scope, &facts, &resolved),
+                &text,
+                topic.as_deref(),
+                supersedes.as_deref(),
+                &ts,
+            )?;
             let data = serde_json::json!({
                 "scope": target.scope,
                 "path": target.path,
-                "appended_bytes": text.len(),
+                "appended_bytes": if report.duplicate { 0 } else { text.len() },
+                "id": report.id,
+                "duplicate": report.duplicate,
+                "superseded": report.superseded,
             });
-            (data, vec![], None)
+            let hint = if report.duplicate {
+                Some(
+                    "entry already present (same scope + second + text) — nothing written"
+                        .to_string(),
+                )
+            } else {
+                None
+            };
+            (data, vec![], hint)
         }
         Commands::Init => {
             let report = workspace::init(&facts, &resolved)?;

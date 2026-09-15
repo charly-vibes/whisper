@@ -18,6 +18,7 @@ const LEGACY_KEYS: &str = "turu.legacy-keys";
 const GROUP_ROOT: &str = "turu.group-root";
 const MANAGED_BLOCK: &str = "turu.managed-block";
 const MANAGED_SKILLS: &str = "turu.managed-skills";
+const ENTRY_FORMAT: &str = "turu.entry-format";
 
 /// Run all doctor checks for the current checkout.
 pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> DoctorReport {
@@ -135,6 +136,47 @@ pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> Docto
             )
         });
     }
+
+    // Unmanaged (freeform) lines in knowledge files: informational —
+    // they carry no entry ids, so recall/bundle treat them as opaque text.
+    let mut unmanaged: Vec<String> = Vec::new();
+    for scope in [Scope::Global, Scope::Repo, Scope::Branch, Scope::Worktree] {
+        let raw = resolve(scope, facts, resolved)
+            .ok()
+            .filter(|t| t.path.exists())
+            .and_then(|t| std::fs::read_to_string(&t.path).ok());
+        if let Some(raw) = raw {
+            let unranked = crate::entry::parse_file(&raw)
+                .into_iter()
+                .filter_map(|i| match i {
+                    crate::entry::Item::Line(l) if !l.trim().is_empty() => Some(l),
+                    _ => None,
+                })
+                .count();
+            if unranked > 0 {
+                unmanaged.push(format!(
+                    "{} ({unranked} freeform line(s))",
+                    resolve(scope, facts, resolved).unwrap().path.display()
+                ));
+            }
+        }
+    }
+    checks.push(if unmanaged.is_empty() {
+        CheckEntry::pass(
+            ENTRY_FORMAT,
+            "knowledge files carry only managed entry lines",
+            "no unmanaged content in scope files",
+        )
+    } else {
+        CheckEntry::warn(
+            ENTRY_FORMAT,
+            "knowledge files carry only managed entry lines",
+            format!(
+                "freeform (unmanaged) content found in: {}",
+                unmanaged.join(", ")
+            ),
+        )
+    });
 
     // Managed block in the agent-facing file.
     let agents = agents_file(repo_root);

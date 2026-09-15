@@ -124,7 +124,12 @@ fn append_creates_then_extends_verbatim() {
         .path()
         .join(".whisper/repos/cv/charly-vibes/whisper/env.md");
     let content = std::fs::read_to_string(&env_md).unwrap();
-    assert_eq!(content, "deploy needs vault\nsecond fact\n");
+    let lines: Vec<&str> = content.lines().collect();
+    assert_eq!(lines.len(), 2);
+    for (line, text) in lines.iter().zip(["deploy needs vault", "second fact"]) {
+        assert!(line.starts_with("- 20") && line.contains(" [id:"));
+        assert!(line.ends_with(text));
+    }
 }
 
 #[test]
@@ -298,7 +303,7 @@ fn doctor_reports_unhealthy_then_healthy_after_sync() {
         .args(["doctor", "--json"])
         .assert()
         .success()
-        .stdout(contains("\"pass\":6"))
+        .stdout(contains("\"pass\":7"))
         .stdout(contains("\"warn\":0"));
 }
 

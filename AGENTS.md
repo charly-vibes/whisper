@@ -1,3 +1,22 @@
+<!-- OPENSPEC:START -->
+# OpenSpec Instructions
+
+These instructions are for AI assistants working in this project.
+
+Always open `@/openspec/AGENTS.md` when the request:
+- Mentions planning or proposals (words like proposal, spec, change, plan)
+- Introduces new capabilities, breaking changes, architecture shifts, or big performance/security work
+- Sounds ambiguous and you need the authoritative spec before coding
+
+Use `@/openspec/AGENTS.md` to learn:
+- How to create and apply change proposals
+- Spec format and conventions
+- Project structure and guidelines
+
+Keep this managed block so 'openspec update' can refresh the instructions.
+
+<!-- OPENSPEC:END -->
+
 # Whisper — Deterministic Knowledge Workspace
 
 Rust CLI on `genesis-vibes` that makes the incitaciones `whisper` skill deterministic: canonical repo keys, branch slugs, worktree slots, and scope-based knowledge routing as pure binary behavior instead of LLM-improvised shell pipelines.
@@ -36,7 +55,7 @@ Precedence: repo (`.whisper/config.toml`, gitignored) > group (global `[groups.*
 - repo → `/var/home/sasha/.whisper/repos/cv/charly-vibes/whisper/env.md`
 - branch → `/var/home/sasha/.whisper/repos/cv/charly-vibes/whisper/branches/main/notes.md`
 - worktree → `/var/home/sasha/.whisper/repos/cv/charly-vibes/whisper/worktrees/.git/env.md`
-- Commands: `turu resolve <scope>` · `turu append <scope> --text ...` · `turu status` · `turu doctor`
+- Commands: `turu resolve <scope>` · `turu append <scope> --text ... [--topic k] [--supersedes id]` · `turu recall <scope> [--topic k] [--budget bytes]` · `turu distill <scope> --begin|--commit` · `turu bundle pack|unpack` · `turu status` · `turu doctor`
 
 <!-- TURU:END -->
 
