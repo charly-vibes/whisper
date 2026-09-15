@@ -283,7 +283,13 @@ fn recall_ranks_newest_first_and_reports_boundary() {
             .stdout,
     )
     .unwrap();
-    let first = out.split("\"text\":\"").nth(1).unwrap().split('"').next().unwrap();
+    let first = out
+        .split("\"text\":\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap();
     assert_eq!(first, "newest fact");
     assert!(out.contains("\"served_bytes\":"));
     assert!(out.contains("\"budget_unused\":null"));
@@ -305,7 +311,10 @@ fn recall_budget_is_whole_entry_atomic() {
     )
     .unwrap();
     assert!(out.contains("\"entries_skipped\":"));
-    assert!(!out.contains("oldest fact"), "smallest-budget slice must drop the oldest");
+    assert!(
+        !out.contains("oldest fact"),
+        "smallest-budget slice must drop the oldest"
+    );
     assert!(out.contains("newest fact"));
     let unused: i64 = out
         .split("\"budget_unused\":")
@@ -342,7 +351,10 @@ fn recall_below_the_horizon_reports_unused_budget() {
         .unwrap()
         .parse()
         .unwrap();
-    assert!(unused > 90_000, "everything served, budget mostly unused: {out}");
+    assert!(
+        unused > 90_000,
+        "everything served, budget mostly unused: {out}"
+    );
 }
 
 #[test]
@@ -354,7 +366,14 @@ fn recall_excludes_superseded_by_default() {
 
     turu(&home, &repo)
         .env("TURU_NOW", "2026-01-04T00:00:00Z")
-        .args(["append", "repo", "--text", "replacement", "--supersedes", &old_id])
+        .args([
+            "append",
+            "repo",
+            "--text",
+            "replacement",
+            "--supersedes",
+            &old_id,
+        ])
         .assert()
         .success();
 
@@ -417,7 +436,10 @@ fn recall_all_composes_in_precedence_order() {
     let gpos = out.find("a global rule").unwrap();
     let rpos = out.find("oldest fact").unwrap();
     let bpos = out.find("a branch note").unwrap();
-    assert!(gpos < rpos && rpos < bpos, "precedence: global < repo < branch; {out}");
+    assert!(
+        gpos < rpos && rpos < bpos,
+        "precedence: global < repo < branch; {out}"
+    );
     assert!(out.contains("\"scope\":\"global\""));
     assert!(out.contains("\"scope\":\"branch\""));
 }
@@ -446,7 +468,10 @@ fn recall_serves_freeform_lines_unranked_at_the_end() {
     let epos = out.find("\"freeform\"").unwrap();
     let fpos = out.find("freeform heading").unwrap();
     let apos = out.find("a fact").unwrap();
-    assert!(apos < epos && epos < fpos, "entries first, freeform last: {out}");
+    assert!(
+        apos < epos && epos < fpos,
+        "entries first, freeform last: {out}"
+    );
 }
 
 #[test]
@@ -469,6 +494,317 @@ fn recall_scope_enum_untouched_all_is_recall_level() {
         .args(["recall", "all", "--json"])
         .assert()
         .success();
+}
+
+// ---------------------------------------------------------------------------
+// add-distill-contract
+// ---------------------------------------------------------------------------
+
+#[test]
+fn distill_begin_snapshots_and_returns_paths() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "stale fact"])
+        .assert()
+        .success();
+
+    let out = String::from_utf8(
+        turu(&home, &repo)
+            .env("TURU_NOW", "2026-01-05T00:00:00Z")
+            .args(["distill", "repo", "--begin", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(out.contains("\"phase\":\"begin\""));
+    assert!(out.contains("\"revision\":\"20260105T000000Z-"));
+    assert!(out.contains("working.md\""));
+    assert!(out.contains("snapshot.md\""));
+    // snapshot + meta exist; revisions dir lives next to the target file
+    assert!(out.contains("revisions"));
+}
+
+#[test]
+fn distill_begin_refuses_when_no_scope_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    turu(&home, &repo)
+        .args(["distill", "repo", "--begin"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn distill_commit_installs_distilled_output_and_keeps_snapshot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "stale fact"])
+        .assert()
+        .success();
+    let target = resolve_repo_path(&home, &repo);
+    let pre = std::fs::read_to_string(&target).unwrap();
+
+    let out = String::from_utf8(
+        turu(&home, &repo)
+            .env("TURU_NOW", "2026-01-05T00:00:00Z")
+            .args(["distill", "repo", "--begin", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let working = out
+        .split("\"working_path\":\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap();
+    let revision = out
+        .split("\"revision\":\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap();
+    let target = resolve_repo_path(&home, &repo);
+
+    // Agent rewrites: keep the entry, drop nothing, add a fresh fact.
+    std::fs::write(working, "distilled content\n").unwrap();
+    turu(&home, &repo)
+        .args([
+            "distill",
+            "repo",
+            "--commit",
+            "--revision",
+            revision,
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(contains("\"phase\":\"commit\""))
+        .stdout(contains("\"noop\":false"));
+
+    let after = std::fs::read_to_string(&target).unwrap();
+    assert_eq!(after, "distilled content\n");
+
+    // Snapshot immutable and retained, equal to the pre-distill content.
+    let rev_dir = target.parent().unwrap().join("revisions").join(revision);
+    assert_eq!(
+        std::fs::read_to_string(rev_dir.join("snapshot.md")).unwrap(),
+        pre
+    );
+}
+
+#[test]
+fn distill_commit_refuses_on_drift() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "fact one"])
+        .assert()
+        .success();
+
+    let out = String::from_utf8(
+        turu(&home, &repo)
+            .env("TURU_NOW", "2026-01-05T00:00:00Z")
+            .args(["distill", "repo", "--begin", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let working = out
+        .split("\"working_path\":\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap();
+    let revision = out
+        .split("\"revision\":\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap();
+
+    // Concurrent append after --begin → drift.
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-06T00:00:00Z")
+        .args(["append", "repo", "--text", "concurrent fact"])
+        .assert()
+        .success();
+    std::fs::write(working, "distilled content\n").unwrap();
+
+    let before = std::fs::read_to_string(resolve_repo_path(&home, &repo)).unwrap();
+    turu(&home, &repo)
+        .args(["distill", "repo", "--commit", "--revision", revision])
+        .assert()
+        .failure()
+        .stderr(contains("changed since --begin"));
+    let after = std::fs::read_to_string(resolve_repo_path(&home, &repo)).unwrap();
+    assert_eq!(before, after, "live file must be untouched on drift");
+}
+
+#[test]
+fn distill_commit_without_working_file_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "fact"])
+        .assert()
+        .success();
+    let out = String::from_utf8(
+        turu(&home, &repo)
+            .env("TURU_NOW", "2026-01-05T00:00:00Z")
+            .args(["distill", "repo", "--begin", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let revision = out
+        .split("\"revision\":\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap();
+
+    turu(&home, &repo)
+        .args(["distill", "repo", "--commit", "--revision", revision])
+        .assert()
+        .failure()
+        .stderr(contains("working file not written"));
+    // live file untouched
+    assert!(
+        std::fs::read_to_string(resolve_repo_path(&home, &repo))
+            .unwrap()
+            .contains("fact")
+    );
+}
+
+#[test]
+fn distill_two_cycles_produce_two_distinct_immutable_revisions() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "v1"])
+        .assert()
+        .success();
+    let target = resolve_repo_path(&home, &repo);
+    let pre = std::fs::read_to_string(&target).unwrap();
+
+    let run_cycle = |now: &str, text: &str| -> String {
+        let out = String::from_utf8(
+            turu(&home, &repo)
+                .env("TURU_NOW", now)
+                .args(["distill", "repo", "--begin", "--json"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+        let working = out
+            .split("\"working_path\":\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .to_string();
+        let revision = out
+            .split("\"revision\":\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .to_string();
+        std::fs::write(&working, text).unwrap();
+        turu(&home, &repo)
+            .args(["distill", "repo", "--commit", "--revision", &revision])
+            .assert()
+            .success();
+        revision
+    };
+
+    let rev1 = run_cycle("2026-01-05T00:00:00Z", "first distill\n");
+    let rev2 = run_cycle("2026-01-06T00:00:00Z", "second distill\n");
+    assert_ne!(rev1, rev2);
+    let rev_dir = target.parent().unwrap().join("revisions");
+    assert!(rev_dir.join(&rev1).join("snapshot.md").exists());
+    assert!(rev_dir.join(&rev2).join("snapshot.md").exists());
+    assert_eq!(
+        std::fs::read_to_string(rev_dir.join(&rev1).join("snapshot.md")).unwrap(),
+        pre
+    );
+    assert_eq!(
+        std::fs::read_to_string(&target).unwrap(),
+        "second distill\n"
+    );
+}
+
+#[test]
+fn distill_commit_replay_is_a_noop() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "fact"])
+        .assert()
+        .success();
+    let out = String::from_utf8(
+        turu(&home, &repo)
+            .env("TURU_NOW", "2026-01-05T00:00:00Z")
+            .args(["distill", "repo", "--begin", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let working = out
+        .split("\"working_path\":\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .to_string();
+    let revision = out
+        .split("\"revision\":\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .to_string();
+    std::fs::write(&working, "distilled\n").unwrap();
+    turu(&home, &repo)
+        .args(["distill", "repo", "--commit", "--revision", &revision])
+        .assert()
+        .success();
+    turu(&home, &repo)
+        .args([
+            "distill",
+            "repo",
+            "--commit",
+            "--revision",
+            &revision,
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(contains("\"noop\":true"));
 }
 
 // ---------------------------------------------------------------------------

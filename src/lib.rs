@@ -9,6 +9,7 @@
 //! Built on `genesis-vibes` for the charly-vibes envelope/CLI conventions.
 
 pub mod config;
+pub mod distill;
 pub mod doctor;
 pub mod entry;
 pub mod recall;

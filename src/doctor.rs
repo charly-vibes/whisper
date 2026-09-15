@@ -19,6 +19,7 @@ const GROUP_ROOT: &str = "turu.group-root";
 const MANAGED_BLOCK: &str = "turu.managed-block";
 const MANAGED_SKILLS: &str = "turu.managed-skills";
 const ENTRY_FORMAT: &str = "turu.entry-format";
+const DISTILL_PENDING: &str = "turu.distill-pending";
 
 /// Run all doctor checks for the current checkout.
 pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> DoctorReport {
@@ -174,6 +175,35 @@ pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> Docto
             format!(
                 "freeform (unmanaged) content found in: {}",
                 unmanaged.join(", ")
+            ),
+        )
+    });
+
+    // Pending distill revisions: begun but not committed (informational).
+    let mut pending: Vec<String> = Vec::new();
+    for scope in [Scope::Global, Scope::Repo, Scope::Branch, Scope::Worktree] {
+        let parent = resolve(scope, facts, resolved)
+            .ok()
+            .and_then(|t| t.path.parent().map(std::path::Path::to_path_buf));
+        if let Some(parent) = parent {
+            for id in crate::distill::pending_revisions(&parent) {
+                pending.push(format!("{} (in {})", id, parent.display()));
+            }
+        }
+    }
+    checks.push(if pending.is_empty() {
+        CheckEntry::pass(
+            DISTILL_PENDING,
+            "no distill revisions left uncommitted",
+            "no pending revisions",
+        )
+    } else {
+        CheckEntry::warn(
+            DISTILL_PENDING,
+            "no distill revisions left uncommitted",
+            format!(
+                "pending: {} — commit with `turu distill <scope> --commit --revision <id>`",
+                pending.join(", ")
             ),
         )
     });

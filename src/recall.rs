@@ -5,7 +5,7 @@
 //! the budget is skipped in its entirety, never truncated.
 
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::config::Resolved;
 use crate::entry::{self, Item};

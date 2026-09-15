@@ -9,7 +9,9 @@ use std::process::exit;
 
 use clap::{Parser, Subcommand};
 use genesis::guide::{CliFormat, CliVerbosity, Output, OutputFormat, Verbosity};
-use whisper::{CLI_VERSION, WhisperError, config, doctor, entry, recall, skill_pack, workspace};
+use whisper::{
+    CLI_VERSION, WhisperError, config, distill, doctor, entry, recall, skill_pack, workspace,
+};
 
 thread_local! {
     static FORMAT: Cell<OutputFormat> = const { Cell::new(OutputFormat::Human) };
@@ -76,6 +78,21 @@ enum Commands {
         /// Include superseded entries.
         #[arg(long)]
         include_superseded: bool,
+    },
+    /// Two-phase distill contract: snapshot, agent rewrites, guarded commit.
+    Distill {
+        /// Scope: global | repo | branch | worktree | group
+        #[arg()]
+        scope: String,
+        /// Snapshot the current state and return the working paths.
+        #[arg(long)]
+        begin: bool,
+        /// Install the distilled working file for this revision.
+        #[arg(long)]
+        commit: bool,
+        /// Revision id (required with --commit).
+        #[arg(long)]
+        revision: Option<String>,
     },
     /// Create the workspace layout for this checkout (never overwrites).
     Init,
@@ -256,6 +273,58 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                 vec![],
                 Some("recall serves mechanically — when to load it is your policy".into()),
             )
+        }
+        Commands::Distill {
+            scope,
+            begin,
+            commit,
+            revision,
+        } => {
+            let scope: workspace::Scope = scope.parse()?;
+            if *begin == *commit {
+                return Err(WhisperError::new("pass exactly one of --begin or --commit"));
+            }
+            if *begin {
+                let ts = entry::parse_or_now(std::env::var("TURU_NOW").ok().as_deref())?;
+                let rev = distill::begin_for_scope(scope, &facts, &resolved, &ts)?;
+                (
+                    serde_json::json!({
+                        "phase": "begin",
+                        "revision": rev.id,
+                        "snapshot_path": rev.snapshot_path,
+                        "working_path": rev.working_path,
+                        "target_path": rev.target_path,
+                        "sha256": rev.sha256,
+                    }),
+                    vec![],
+                    Some(format!(
+                        "rewrite {} with the distilled content, then: turu distill {} --commit --revision {}",
+                        rev.working_path.display(),
+                        scope_name(scope),
+                        rev.id
+                    )),
+                )
+            } else {
+                let revision = revision.as_deref().ok_or_else(|| {
+                    WhisperError::new("--commit requires --revision <id>")
+                        .with_suggestion("turu distill <scope> --begin returns the revision id")
+                })?;
+                let report = distill::commit_for_scope(scope, &facts, &resolved, revision)?;
+                (
+                    serde_json::json!({
+                        "phase": "commit",
+                        "revision": report.revision,
+                        "replaced": report.replaced,
+                        "snapshot_path": report.snapshot_path,
+                        "noop": report.noop,
+                    }),
+                    vec![],
+                    Some(format!(
+                        "snapshot retained at {} (immutable)",
+                        report.snapshot_path.display()
+                    )),
+                )
+            }
         }
         Commands::Init => {
             let report = workspace::init(&facts, &resolved)?;

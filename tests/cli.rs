@@ -303,7 +303,7 @@ fn doctor_reports_unhealthy_then_healthy_after_sync() {
         .args(["doctor", "--json"])
         .assert()
         .success()
-        .stdout(contains("\"pass\":7"))
+        .stdout(contains("\"pass\":8"))
         .stdout(contains("\"warn\":0"));
 }
 
