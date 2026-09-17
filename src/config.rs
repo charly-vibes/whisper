@@ -130,7 +130,10 @@ pub fn load(cwd: &Path, repo_key: &str) -> Result<Resolved> {
             .unwrap_or(DEFAULT_WORKSPACE_ROOT),
     );
 
-    let repo_cfg = find_repo_config(cwd).map(|(_, cfg)| cfg);
+    let (repo_cfg_dir, repo_cfg) = match find_repo_config(cwd) {
+        Some((dir, cfg)) => (Some(dir), Some(cfg)),
+        None => (None, None),
+    };
 
     // Group resolution order: repo config's explicit `group`, then global
     // membership lists. Group root beats the global workspace root; a repo
@@ -160,12 +163,21 @@ pub fn load(cwd: &Path, repo_key: &str) -> Result<Resolved> {
         group = Some((name.clone(), expand_tilde(&gc.root)));
     }
 
-    // Repo private root override.
-    if let Some(cfg) = &repo_cfg
+    // Repo private root override. A relative path is anchored to the
+    // directory containing the repo config, so resolution never depends on
+    // the process cwd (GH #1: subdirectory calls must not spawn stray
+    // workspace trees).
+    if let (Some(cfg_dir), Some(cfg)) = (&repo_cfg_dir, &repo_cfg)
         && let Some(root) = &cfg.workspace_root
     {
+        let expanded = expand_tilde(root);
+        let anchored = if expanded.is_absolute() {
+            expanded
+        } else {
+            cfg_dir.join(expanded)
+        };
         return Ok(Resolved {
-            workspace_root: expand_tilde(root),
+            workspace_root: anchored,
             group,
         });
     }
@@ -212,6 +224,27 @@ repos = ["cv/charly-vibes/whisper"]
         let cfg: GlobalConfig = toml::from_str(raw).unwrap();
         assert_eq!(cfg.groups["cv-tools"].root, "~/knowledge");
         assert_eq!(cfg.groups["cv-tools"].repos.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn relative_repo_workspace_root_anchors_to_config_dir() {
+        // GH #1: a repo-private relative workspace_root must resolve against
+        // the directory containing the config, not the process cwd — so a
+        // turu call from a nested subdir never materializes a stray
+        // `<subdir>/.whisper/` tree.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(repo.join(".whisper")).unwrap();
+        std::fs::create_dir_all(repo.join("scripts")).unwrap();
+        std::fs::write(
+            repo.join(".whisper/config.toml"),
+            "workspace_root = \".whisper\"\n",
+        )
+        .unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path().join("xdg")) };
+        let resolved = load(&repo.join("scripts"), "github.com/u/r").unwrap();
+        assert_eq!(resolved.workspace_root, repo.join(".whisper"));
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
     }
 
     #[test]
