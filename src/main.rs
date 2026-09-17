@@ -121,6 +121,21 @@ enum Commands {
         #[command(subcommand)]
         command: SkillCommand,
     },
+    /// Report a bug or feature request via GitHub issues.
+    #[command(
+        after_help = "Examples:\n  turu feedback bug --dry-run\n  echo \"steps to reproduce…\" | turu feedback bug\n  turu feedback bug --from-last-error"
+    )]
+    Feedback {
+        /// Kind of feedback: bug, feature, question, or chore.
+        #[arg(value_name = "KIND")]
+        kind: String,
+        /// Include the last error context from turu's error scratch.
+        #[arg(long)]
+        from_last_error: bool,
+        /// Print the issue body and gh command without submitting.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -168,6 +183,17 @@ fn run(cli: Cli) -> i32 {
     match dispatch(&cli) {
         Ok(output) => emit_ok(&output),
         Err(err) => {
+            // Adopt the genesis scratch contract: persist the last error on
+            // non-zero exits so `turu feedback bug --from-last-error` has a
+            // record to read (best-effort, never shadows the real error).
+            let record = genesis::feedback::scratch::ErrorRecord {
+                ts: scratch_timestamp(),
+                argv: std::env::args().collect(),
+                exit: 1,
+                footer: err.suggestion.clone(),
+                kind: "error".to_string(),
+            };
+            genesis::feedback::scratch::write_scratch_best_effort("turu", &record);
             let mut out = Output::<String>::failure(err.message.clone());
             if let Some(s) = &err.suggestion {
                 out = out.with_next_step(s);
@@ -176,6 +202,14 @@ fn run(cli: Cli) -> i32 {
             1
         }
     }
+}
+
+/// ISO 8601 UTC timestamp for error-scratch records (same shape as the
+/// genesis Guide's ErrorSink writes).
+fn scratch_timestamp() -> String {
+    let now = time::OffsetDateTime::now_utc();
+    now.format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
 fn emit_ok<T: serde::Serialize + std::fmt::Debug>(output: &Output<T>) -> i32 {
@@ -486,6 +520,46 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                     target.display()
                 )),
             )
+        }
+        Commands::Feedback {
+            kind,
+            from_last_error,
+            dry_run,
+        } => {
+            let args =
+                genesis::feedback::FeedbackArgs::new(kind.clone(), *dry_run, *from_last_error);
+            let repo = env!("CARGO_PKG_REPOSITORY")
+                .trim_start_matches("https://github.com/")
+                .trim_start_matches("http://github.com/")
+                .to_string();
+            let repo_root = workspace::repo_root(&cwd);
+            let result = genesis::feedback::handle_feedback(
+                &args,
+                "turu",
+                CLI_VERSION,
+                &repo,
+                &repo_root,
+            )
+            .map_err(|msg| {
+                WhisperError::new(msg).with_suggestion(
+                    "pipe content into stdin, use --from-last-error, or preview with `turu feedback bug --dry-run`",
+                )
+            })?;
+            let (data, hint) = match result {
+                genesis::feedback::gh::GhResult::Created { url, number } => (
+                    serde_json::json!({ "outcome": "created", "url": url, "issue": number }),
+                    "issue filed — the maintainers will pick it up".to_string(),
+                ),
+                genesis::feedback::gh::GhResult::FallbackUrl(url) => (
+                    serde_json::json!({ "outcome": "fallback", "url": url }),
+                    "issue body printed to stderr — open the url to file it manually".to_string(),
+                ),
+                genesis::feedback::gh::GhResult::LocalFile(path) => (
+                    serde_json::json!({ "outcome": "saved-local", "file": path }),
+                    "network unavailable — attach this file to a new GitHub issue".to_string(),
+                ),
+            };
+            (data, vec![], Some(hint))
         }
         Commands::Skill {
             command: SkillCommand::Install { dir },

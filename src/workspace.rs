@@ -157,7 +157,7 @@ pub fn managed_block_content(facts: &Facts, resolved: &Resolved) -> Result<Strin
            - repo → {}\n\
            - branch → {}\n\
            - worktree → {}\n\
-         - Commands: `turu resolve <scope>` · `turu append <scope> --text ... [--topic k] [--supersedes id]` · `turu recall <scope> [--topic k] [--budget bytes]` · `turu distill <scope> --begin|--commit` · `turu bundle pack|unpack` · `turu status` · `turu doctor`\n",
+         - Commands: `turu resolve <scope>` · `turu append <scope> --text ... [--topic k] [--supersedes id]` · `turu recall <scope> [--topic k] [--budget bytes]` · `turu distill <scope> --begin|--commit` · `turu bundle pack|unpack` · `turu status` · `turu doctor` · `turu feedback <kind>`\n",
         resolved.workspace_root.display(),
         resolved
             .group

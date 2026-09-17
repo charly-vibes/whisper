@@ -433,6 +433,81 @@ fn check_warns_when_repo_private_root_shadows_global_rules() {
 }
 
 #[test]
+fn feedback_dry_run_previews_body_and_fallback_url() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let repo = home.join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    turu(&home, &repo)
+        .args(["feedback", "bug", "--dry-run"])
+        .write_stdin("steps to reproduce the bug\n")
+        .assert()
+        .success()
+        .stdout(contains("fallback"))
+        .stdout(contains("issues/new"))
+        .stderr(contains("## Description"))
+        .stderr(contains("steps to reproduce the bug"))
+        .stderr(contains("Would file: gh issue create"));
+}
+
+#[test]
+fn feedback_rejects_unknown_kind() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let repo = home.join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    turu(&home, &repo)
+        .args(["feedback", "bugz"])
+        .assert()
+        .failure()
+        .stdout(contains("unknown kind"));
+}
+
+#[test]
+fn feedback_requires_content() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let repo = home.join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    // Closed stdin (not a terminal) and no --from-last-error: loud failure.
+    turu(&home, &repo)
+        .args(["feedback", "bug"])
+        .assert()
+        .failure()
+        .stdout(contains("No issue content specified"));
+}
+
+#[test]
+fn feedback_from_last_error_reads_the_scratch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let repo = home.join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+    let cache = tmp.path().join("cache");
+
+    // 1. A failing turu command persists an error-scratch record (best-effort).
+    turu(&home, &repo)
+        .env("XDG_CACHE_HOME", &cache)
+        .args(["resolve", "group", "--json"])
+        .assert()
+        .failure();
+    assert!(cache.join("turu/errors.jsonl").exists());
+
+    // 2. `feedback bug --from-last-error` folds that record into the body.
+    turu(&home, &repo)
+        .env("XDG_CACHE_HOME", &cache)
+        .args(["feedback", "bug", "--from-last-error", "--dry-run"])
+        .assert()
+        .success()
+        .stderr(contains("## Error"))
+        .stderr(contains("auto-reported error"))
+        .stdout(contains("fallback"));
+}
+
+#[test]
 fn check_flags_missing_rules_file() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
