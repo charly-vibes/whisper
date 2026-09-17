@@ -390,6 +390,49 @@ fn doctor_warns_when_repo_private_root_shadows_global_rules() {
 }
 
 #[test]
+fn check_warns_when_repo_private_root_shadows_global_rules() {
+    // whisper-122 follow-through: `turu check` is the fast-path validator —
+    // it must surface the shadowing alongside `turu doctor`.
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let repo = home.join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    let global_ws = tmp.path().join("global-ws");
+    std::fs::create_dir_all(&global_ws).unwrap();
+    std::fs::write(global_ws.join("rules.md"), "global rule\n").unwrap();
+    std::fs::create_dir_all(home.join(".config/whisper")).unwrap();
+    std::fs::write(
+        home.join(".config/whisper/config.toml"),
+        format!("workspace_root = '{}'\n", global_ws.display()),
+    )
+    .unwrap();
+
+    let private_ws = tmp.path().join("private-ws");
+    std::fs::create_dir_all(repo.join(".whisper")).unwrap();
+    std::fs::write(
+        repo.join(".whisper/config.toml"),
+        format!("workspace_root = '{}'\n", private_ws.display()),
+    )
+    .unwrap();
+
+    turu(&home, &repo)
+        .args(["check", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("shadows the global rules file"));
+
+    // In-sync copies do not warn.
+    std::fs::create_dir_all(&private_ws).unwrap();
+    std::fs::write(private_ws.join("rules.md"), "global rule\n").unwrap();
+    turu(&home, &repo)
+        .args(["check", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("workspace looks consistent"));
+}
+
+#[test]
 fn check_flags_missing_rules_file() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");

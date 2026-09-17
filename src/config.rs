@@ -141,8 +141,9 @@ pub fn load(cwd: &Path, repo_key: &str) -> Result<Resolved> {
     };
 
     // Group resolution order: repo config's explicit `group`, then global
-    // membership lists. Group root beats the global workspace root; a repo
-    // private `workspace_root` beats everything.
+    // membership lists. Group root beats the global workspace root for
+    // repo/branch/worktree scopes; a repo private `workspace_root` beats
+    // the workspace root for the global scope (`rules.md`).
     let mut group: Option<(String, PathBuf)> = None;
     if let Some(cfg) = &repo_cfg
         && let Some(name) = &cfg.group

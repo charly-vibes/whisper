@@ -420,6 +420,19 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                     resolved.workspace_root.join("rules.md").display()
                 ));
             }
+            if let Some(real_root) = &resolved.shadowed_global_root {
+                let real = real_root.join("rules.md");
+                let shadowed = resolved.workspace_root.join("rules.md");
+                let diverged = shadowed.exists()
+                    && std::fs::read_to_string(&real).unwrap_or_default()
+                        != std::fs::read_to_string(&shadowed).unwrap_or_default();
+                if real.exists() && (!shadowed.exists() || diverged) {
+                    warnings.push(format!(
+                        "repo-private workspace_root shadows the global rules file at {} — run `turu doctor` for detail",
+                        real.display()
+                    ));
+                }
+            }
             let data = serde_json::json!({
                 "workspace_root": resolved.workspace_root,
                 "repo_key": facts.repo_key,
