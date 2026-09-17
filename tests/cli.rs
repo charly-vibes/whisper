@@ -462,7 +462,8 @@ fn feedback_rejects_unknown_kind() {
         .args(["feedback", "bugz"])
         .assert()
         .failure()
-        .stdout(contains("unknown kind"));
+        .stdout(contains("unknown kind"))
+        .stdout(contains("pass one of: bug, feature, question, chore"));
 }
 
 #[test]

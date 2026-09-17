@@ -204,12 +204,10 @@ fn run(cli: Cli) -> i32 {
     }
 }
 
-/// ISO 8601 UTC timestamp for error-scratch records (same shape as the
-/// genesis Guide's ErrorSink writes).
+/// Second-precision UTC timestamp for error-scratch records (same shape as
+/// the genesis Guide's ErrorSink writes and every other turu timestamp).
 fn scratch_timestamp() -> String {
-    let now = time::OffsetDateTime::now_utc();
-    now.format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+    crate::entry::parse_or_now(None).unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
 fn emit_ok<T: serde::Serialize + std::fmt::Debug>(output: &Output<T>) -> i32 {
@@ -541,9 +539,13 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                 &repo_root,
             )
             .map_err(|msg| {
-                WhisperError::new(msg).with_suggestion(
-                    "pipe content into stdin, use --from-last-error, or preview with `turu feedback bug --dry-run`",
-                )
+                let suggestion = if msg.starts_with("unknown kind") {
+                    "pass one of: bug, feature, question, chore".to_string()
+                } else {
+                    "pipe content into stdin, use --from-last-error, or preview with `turu feedback bug --dry-run`"
+                        .to_string()
+                };
+                WhisperError::new(msg).with_suggestion(suggestion)
             })?;
             let (data, hint) = match result {
                 genesis::feedback::gh::GhResult::Created { url, number } => (
