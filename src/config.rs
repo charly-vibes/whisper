@@ -55,6 +55,11 @@ pub struct Resolved {
     pub workspace_root: PathBuf,
     /// Active group: (name, group root), if any.
     pub group: Option<(String, PathBuf)>,
+    /// The workspace root this checkout would use without the repo-private
+    /// override — present exactly when a repo config sets its own
+    /// `workspace_root`. That override also relocates the global scope
+    /// (`rules.md`), so doctor compares it against the shadowed location.
+    pub shadowed_global_root: Option<PathBuf>,
 }
 
 impl Resolved {
@@ -179,12 +184,14 @@ pub fn load(cwd: &Path, repo_key: &str) -> Result<Resolved> {
         return Ok(Resolved {
             workspace_root: anchored,
             group,
+            shadowed_global_root: Some(default_root),
         });
     }
 
     Ok(Resolved {
         workspace_root: default_root,
         group,
+        shadowed_global_root: None,
     })
 }
 

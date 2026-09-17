@@ -332,6 +332,64 @@ fn skill_install_writes_pack_and_doctor_reports_current() {
 }
 
 #[test]
+fn doctor_warns_when_repo_private_root_shadows_global_rules() {
+    // GH-issue follow-up: a repo-private `workspace_root` intentionally beats
+    // everything — which also relocates the global scope (`rules.md`) for
+    // that repo. Doctor must surface the shadowing and any divergence.
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let repo = home.join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    // Global workspace with a rules file.
+    let global_ws = tmp.path().join("global-ws");
+    std::fs::create_dir_all(&global_ws).unwrap();
+    std::fs::write(global_ws.join("rules.md"), "global rule\n").unwrap();
+    std::fs::create_dir_all(home.join(".config/whisper")).unwrap();
+    std::fs::write(
+        home.join(".config/whisper/config.toml"),
+        format!("workspace_root = '{}'\n", global_ws.display()),
+    )
+    .unwrap();
+
+    // Repo-private root override shadows that global scope.
+    let private_ws = tmp.path().join("private-ws");
+    std::fs::create_dir_all(repo.join(".whisper")).unwrap();
+    std::fs::write(
+        repo.join(".whisper/config.toml"),
+        format!("workspace_root = '{}'\n", private_ws.display()),
+    )
+    .unwrap();
+
+    // 1. Global rules.md exists but is hidden by the private root → warn.
+    turu(&home, &repo)
+        .args(["doctor", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("turu.shadowed-global"))
+        .stdout(contains("hides"));
+
+    // 2. Identical content in both → informational pass.
+    std::fs::create_dir_all(&private_ws).unwrap();
+    std::fs::write(private_ws.join("rules.md"), "global rule\n").unwrap();
+    turu(&home, &repo)
+        .args(["doctor", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("turu.shadowed-global"))
+        .stdout(contains("in sync"));
+
+    // 3. Diverged content → warn.
+    std::fs::write(private_ws.join("rules.md"), "diverged\n").unwrap();
+    turu(&home, &repo)
+        .args(["doctor", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("turu.shadowed-global"))
+        .stdout(contains("diverged"));
+}
+
+#[test]
 fn check_flags_missing_rules_file() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");

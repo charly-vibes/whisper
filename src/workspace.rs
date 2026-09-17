@@ -683,6 +683,7 @@ mod tests {
         let resolved = Resolved {
             workspace_root: PathBuf::from("/tmp/ws"),
             group: None,
+            shadowed_global_root: None,
         };
         let t = resolve(Scope::Branch, &facts, &resolved).unwrap();
         assert_eq!(
@@ -701,6 +702,7 @@ mod tests {
         let resolved = Resolved {
             workspace_root: PathBuf::from("/tmp/ws"),
             group: None,
+            shadowed_global_root: None,
         };
         let err = resolve(Scope::Group, &facts, &resolved).unwrap_err();
         assert!(err.suggestion.is_some());
@@ -723,6 +725,7 @@ mod tests {
         let resolved = Resolved {
             workspace_root: tmp.path().to_path_buf(),
             group: None,
+            shadowed_global_root: None,
         };
 
         let variants = legacy_variants(&ws_facts("github.com/u/whisper"), &resolved);
@@ -744,6 +747,7 @@ mod tests {
         let resolved = Resolved {
             workspace_root: tmp.path().to_path_buf(),
             group: None,
+            shadowed_global_root: None,
         };
 
         let report = consolidate(&ws_facts("github.com/u/whisper"), &resolved).unwrap();
@@ -774,6 +778,7 @@ mod tests {
         let resolved = Resolved {
             workspace_root: tmp.path().to_path_buf(),
             group: None,
+            shadowed_global_root: None,
         };
 
         let report = consolidate(&ws_facts("github.com/u/whisper"), &resolved).unwrap();
@@ -807,6 +812,7 @@ mod tests {
         let resolved = Resolved {
             workspace_root: tmp.path().to_path_buf(),
             group: None,
+            shadowed_global_root: None,
         };
 
         consolidate(&ws_facts("github.com/u/whisper"), &resolved).unwrap();
@@ -828,6 +834,7 @@ mod tests {
         let resolved = Resolved {
             workspace_root: tmp.path().to_path_buf(),
             group: None,
+            shadowed_global_root: None,
         };
 
         let report = consolidate(&ws_facts("github.com/u/r"), &resolved).unwrap();
@@ -849,6 +856,7 @@ mod tests {
         let resolved = Resolved {
             workspace_root: tmp.path().to_path_buf(),
             group: None,
+            shadowed_global_root: None,
         };
         let t = resolve(Scope::Repo, &facts, &resolved).unwrap();
         assert!(t.ensure().unwrap());

@@ -16,6 +16,7 @@ const RULES: &str = "turu.rules-md";
 const BRANCH_SLOT: &str = "turu.branch-slot";
 const LEGACY_KEYS: &str = "turu.legacy-keys";
 const GROUP_ROOT: &str = "turu.group-root";
+const SHADOWED_GLOBAL: &str = "turu.shadowed-global";
 const MANAGED_BLOCK: &str = "turu.managed-block";
 const MANAGED_SKILLS: &str = "turu.managed-skills";
 const ENTRY_FORMAT: &str = "turu.entry-format";
@@ -135,6 +136,63 @@ pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> Docto
                 ),
                 "turu init",
             )
+        });
+    }
+
+    // Repo-private workspace_root shadowing the global scope: the override
+    // also relocates `rules.md`, so the repo can silently lose sight of the
+    // shared global rules. Surface the shadowing and any divergence.
+    if let Some(real_root) = &resolved.shadowed_global_root {
+        let real_rules = real_root.join("rules.md");
+        let shadowed_rules = resolved.workspace_root.join("rules.md");
+        checks.push(if !real_rules.exists() {
+            CheckEntry::pass(
+                SHADOWED_GLOBAL,
+                "repo-private root does not hide a global rules file",
+                format!(
+                    "repo-private root shadows the global scope, but `{}` is absent — nothing hidden",
+                    real_rules.display()
+                ),
+            )
+        } else if !shadowed_rules.exists() {
+            with_fix(
+                CheckEntry::warn(
+                    SHADOWED_GLOBAL,
+                    "repo-private root does not hide a global rules file",
+                    format!(
+                        "repo-private root `{}` hides the global rules file at `{}` — the repo no longer sees it",
+                        resolved.workspace_root.display(),
+                        real_rules.display()
+                    ),
+                ),
+                "copy the global rules.md into the private root, or remove the repo-private workspace_root override",
+            )
+        } else {
+            let real = std::fs::read_to_string(&real_rules).unwrap_or_default();
+            let shadowed = std::fs::read_to_string(&shadowed_rules).unwrap_or_default();
+            if real == shadowed {
+                CheckEntry::pass(
+                    SHADOWED_GLOBAL,
+                    "repo-private root does not hide a global rules file",
+                    format!(
+                        "repo-private root shadows the global scope, but rules.md is in sync with `{}`",
+                        real_rules.display()
+                    ),
+                )
+            } else {
+                with_fix(
+                    CheckEntry::warn(
+                        SHADOWED_GLOBAL,
+                        "repo-private root does not hide a global rules file",
+                        format!(
+                            "shadowed rules.md at `{}` has diverged from the global rules.md at `{}`",
+                            shadowed_rules.display(),
+                            real_rules.display()
+                        ),
+                    ),
+                    "reconcile the two rules.md files (copy the global one over, or port the local changes back)",
+                )
+            }
         });
     }
 

@@ -66,6 +66,8 @@ workspace_root = "/path/to/dir" # or fully override the workspace root
 
 A repo can join a group two ways: privately, via its own `.whisper/config.toml`, or centrally, by listing its canonical key in the group's `repos` array.
 
+> **Note:** a repo-private `workspace_root` overrides *everything* — including the global scope, so the repo's `rules.md` resolves inside the private root instead of the shared workspace. `turu doctor` reports this shadowing and warns when the two `rules.md` files diverge. A relative `workspace_root` is anchored to the directory containing the repo config (not the process cwd), so calls from any subdirectory resolve to the same root.
+
 ## Skill integration
 
 The distilled whisper skill in incitantes replaces its shell-snippet procedures with:
