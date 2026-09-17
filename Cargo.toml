@@ -1,6 +1,6 @@
 [package]
 name = "whisper-vibes"
-version = "0.5.0"
+version = "0.6.0"
 default-run = "turu"
 edition = "2024"
 description = "Deterministic knowledge workspace management for AI agents — the mechanical half of the whisper skill as a CLI"

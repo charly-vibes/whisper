@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-09-17
+
+### Added
+
+- `turu feedback <kind> [--from-last-error] [--dry-run]` (`whisper-1ug`) — file a well-contexted GitHub issue via `genesis::feedback`: kind validation with typo suggestions, content from piped stdin or error-scratch recall, `--dry-run` preview of the redacted body and `gh` command; kind-specific error suggestions (Rule-of-5)
+- Error-scratch contract: failing turu commands persist a best-effort second-precision scratch record (same shape as the genesis Guide's ErrorSink) so `turu feedback bug --from-last-error` has data to recall
+- Managed block generator lists `turu feedback <kind>`; genesis API compatibility fixture (vampiro's pattern)
+
 ## [0.5.0] - 2026-09-17
 
 ### Added
