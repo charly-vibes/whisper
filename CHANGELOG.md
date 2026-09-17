@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-09-17
+
+### Added
+
+- `turu.shadowed-global` doctor check (`whisper-122`) — when a repo-private `workspace_root` override is active, surfaces that it shadows the global scope: a hidden global `rules.md` warns, diverged copies warn with both paths, in-sync copies pass informationally
+- `turu check` warns when the repo-private root hides or diverges from the global `rules.md` (previously only `turu doctor` reported it)
+
+### Fixed
+
+- A repo-private `workspace_root` with a **relative** path now anchors to the directory containing the repo config instead of the process cwd (GH #1) — `turu` invoked from a subdirectory no longer materializes a stray `<subdir>/.whisper/` workspace tree; absolute and `~` paths are unchanged
+
 ## [0.4.0] - 2026-09-15
 
 ### Added
