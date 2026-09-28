@@ -5,3 +5,8 @@
   - Gotchas: scope_name lives in main.rs not workspace.rs (inline match for suggestions); clippy unused resolved param -> underscore; installed turu on PATH is stale — smoke-test ./target/debug/turu
   - Publication-verb exclusion deliberately NOT here: pack/unpack/consolidate guards are whisper-4xo (slice 3); init/doctor gitignore checks are whisper-7eo
   - **Next:** claim whisper-4xo (transport guards) — now unblocked
+- 2026-09-28T21:06:17Z [id:87a43eff2de06252b914d330b88dac3fb14ea8d3fda658ea65126855b1df5d5b] ### 2026-09-28 21:30 — snap
+  - whisper-4xo shipped (7521643): transport guards — pack refuses private-resolved scopes (no bundle), reports private_excluded count; unpack skips+reports private_skipped, never writes under the zone; consolidate refuses canonical dirs under the zone; exact-path via component-wise starts_with
+  - Gotcha: can't trigger pack/unpack guards with synthetic repo_local_root inside the zone (zone root = root+/private composes past it) — real trigger is a misconfigured group root inside the zone, which resolve() honors; unpack envelope does not echo entry text, assert file contents instead; clippy &PathBuf-vs-&Path in test helpers
+  - Remaining: whisper-7eo (init/sync gitignore rule + doctor privacy checks + README/skill docs) — last slice of add-repo-private-scope
+  - **Next:** claim whisper-7eo
