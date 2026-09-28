@@ -757,6 +757,124 @@ fn ignore_rule_ensure_is_a_noop_outside_a_repo() {
     assert!(!plain.join(".gitignore").exists());
 }
 
+// ---------------------------------------------------------------------------
+// add-repo-private-scope 3.2 — doctor privacy integrity
+// ---------------------------------------------------------------------------
+
+#[test]
+fn doctor_warns_when_private_zone_is_not_effectively_ignored() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    turu(tmp.path(), &repo)
+        .args(["doctor", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("turu.private-ignore"))
+        .stdout(contains("not effectively ignored"));
+
+    // Self-heal: init appends the rule exactly once, and the check passes.
+    turu(tmp.path(), &repo).args(["init"]).assert().success();
+    turu(tmp.path(), &repo).args(["sync"]).assert().success();
+    assert_eq!(
+        std::fs::read_to_string(repo.join(".gitignore"))
+            .unwrap()
+            .matches(".whisper/private/")
+            .count(),
+        1
+    );
+    turu(tmp.path(), &repo)
+        .args(["doctor", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("turu.private-ignore"))
+        .stdout(contains("\"warn\":0"));
+}
+
+#[test]
+fn doctor_fails_prominently_on_tracked_files_under_private_zone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+    std::fs::create_dir_all(repo.join(".whisper/private")).unwrap();
+    std::fs::write(
+        repo.join(".whisper/private/env.md"),
+        "secret machine facts\n",
+    )
+    .unwrap();
+    let status = Command::new("git")
+        .args(["add", "-f", ".whisper/private/env.md"])
+        .current_dir(&repo)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    turu(tmp.path(), &repo)
+        .args(["doctor", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("turu.private-tracked"))
+        .stdout(contains("\"fail\":1"))
+        .stdout(contains("history is forever"));
+}
+
+#[test]
+fn doctor_emits_leak_warnings_for_public_repo_local_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    turu(tmp.path(), &repo).args(["init"]).assert().success();
+    turu(tmp.path(), &repo).args(["sync"]).assert().success();
+    turu(tmp.path(), &repo)
+        .args([
+            "append",
+            "repo",
+            "--text",
+            "deploy runs from /home/sasha/infra",
+        ])
+        .assert()
+        .success();
+
+    // Advisory: doctor still exits 0; the leak surfaces in warnings[].
+    turu(tmp.path(), &repo)
+        .args(["doctor", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("turu.private-leaks"))
+        .stdout(contains("machine path"))
+        .stdout(contains("\"warn\":1"))
+        .stdout(contains("\"fail\":0"));
+}
+
+#[test]
+fn doctor_leak_lint_stays_quiet_on_clean_checkouts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    turu(tmp.path(), &repo).args(["init"]).assert().success();
+    turu(tmp.path(), &repo).args(["sync"]).assert().success();
+    turu(tmp.path(), &repo)
+        .args([
+            "append",
+            "branch",
+            "--text",
+            "prefer O_APPEND fast path over full rewrites",
+        ])
+        .assert()
+        .success();
+
+    turu(tmp.path(), &repo)
+        .args(["doctor", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("turu.private-leaks"))
+        .stdout(contains("\"warn\":0"))
+        .stdout(contains("\"fail\":0"));
+}
+
 #[test]
 fn append_creates_then_extends_verbatim() {
     let tmp = tempfile::tempdir().unwrap();
@@ -955,7 +1073,7 @@ fn doctor_reports_unhealthy_then_healthy_after_sync() {
         .assert()
         .success()
         .stdout(contains("turu.managed-block"))
-        .stdout(contains("\"warn\":4"));
+        .stdout(contains("\"warn\":5"));
 
     turu(tmp.path(), &repo).args(["init"]).assert().success();
     turu(tmp.path(), &repo).args(["sync"]).assert().success();
@@ -964,7 +1082,7 @@ fn doctor_reports_unhealthy_then_healthy_after_sync() {
         .args(["doctor", "--json"])
         .assert()
         .success()
-        .stdout(contains("\"pass\":9"))
+        .stdout(contains("\"pass\":12"))
         .stdout(contains("\"warn\":0"));
 }
 

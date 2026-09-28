@@ -573,19 +573,66 @@ pub fn is_in_private_zone(path: &Path, facts: &Facts) -> bool {
 // Checkout self-protection (add-repo-private-scope 3.1)
 // ---------------------------------------------------------------------------
 
-/// Is the private zone effectively ignored? `git check-ignore` is the
-/// truth, not text presence: a nested `.gitignore` (or the user's global
-/// excludes file) can already carry the effective rule. The probe is a
-/// synthetic file path *under* the zone — a dir-only pattern (`private/`)
-/// does not match the bare directory name before the directory exists,
-/// but it must match every file the zone will ever contain.
-fn private_zone_effectively_ignored(checkout: &Path, rel: &str) -> bool {
-    let probe = format!("{rel}/probe");
+/// Effective-ignore state of the checkout's private zone.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PrivateZoneState {
+    /// No checkout — the zone resolves nowhere.
+    NoCheckout,
+    /// `git check-ignore` reports the zone as ignored.
+    Ignored,
+    /// Zone reachable by git — needs the ignore rule.
+    Exposed,
+}
+
+/// Effective-ignore state of the checkout's private zone: `git
+/// check-ignore` is the truth, not text presence — a nested `.gitignore`
+/// (or the user's global excludes file) can already carry the rule. The
+/// probe is a synthetic file path *under* the zone: a dir-only pattern
+/// (`private/`) does not match the bare directory name before the
+/// directory exists, but it must match every file the zone will contain.
+pub fn private_zone_state(facts: &Facts) -> PrivateZoneState {
+    let Some(local_root) = &facts.repo_local_root else {
+        return PrivateZoneState::NoCheckout;
+    };
+    let checkout = local_root
+        .parent()
+        .expect("repo-local root always has a parent (the checkout)");
+    let rel = Path::new(REPO_LOCAL_DIR).join("private");
+    let probe = format!("{}/probe", rel.to_string_lossy());
     let out = Command::new("git")
         .args(["check-ignore", "-q", "--", &probe])
         .current_dir(checkout)
         .output();
-    matches!(out, Ok(o) if o.status.code() == Some(0))
+    if matches!(out, Ok(o) if o.status.code() == Some(0)) {
+        PrivateZoneState::Ignored
+    } else {
+        PrivateZoneState::Exposed
+    }
+}
+
+/// Files tracked by git under the checkout's private zone. Tracked files
+/// mean the knowledge is already in history — git history is forever,
+/// so doctor reports this as a prominent failure, never a warning.
+pub fn tracked_files_under_private_zone(facts: &Facts) -> Vec<PathBuf> {
+    let Some(local_root) = &facts.repo_local_root else {
+        return Vec::new();
+    };
+    let checkout = local_root
+        .parent()
+        .expect("repo-local root always has a parent (the checkout)");
+    let rel = Path::new(REPO_LOCAL_DIR).join("private");
+    let out = Command::new("git")
+        .args(["ls-files", "--", &rel.to_string_lossy()])
+        .current_dir(checkout)
+        .output();
+    match out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| checkout.join(l.trim()))
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Ensure the checkout's private zone is effectively ignored by git.
@@ -596,24 +643,25 @@ fn private_zone_effectively_ignored(checkout: &Path, rel: &str) -> bool {
 /// checkout (no repo-local root → no zone to protect). Returns whether
 /// the rule was appended.
 pub fn ensure_private_ignored(facts: &Facts) -> Result<bool> {
-    let Some(local_root) = &facts.repo_local_root else {
-        return Ok(false);
-    };
-    let checkout = local_root
-        .parent()
-        .expect("repo-local root always has a parent (the checkout)");
-    let rel = Path::new(REPO_LOCAL_DIR).join("private");
-    let rel = rel.to_string_lossy();
-    if private_zone_effectively_ignored(checkout, &rel) {
+    if private_zone_state(facts) != PrivateZoneState::Exposed {
         return Ok(false);
     }
+    let checkout = facts
+        .repo_local_root
+        .as_ref()
+        .expect("Exposed implies a checkout")
+        .parent()
+        .expect("repo-local root always has a parent (the checkout)")
+        .to_path_buf();
+    let rel = Path::new(REPO_LOCAL_DIR).join("private");
     let gitignore = checkout.join(".gitignore");
     let mut content = std::fs::read_to_string(&gitignore).unwrap_or_default();
     if !content.is_empty() && !content.ends_with('\n') {
         content.push('\n');
     }
     content.push_str(&format!(
-        "# turu private zone — machine-specific knowledge, never pushed (git history is forever)\n{rel}/\n"
+        "# turu private zone — machine-specific knowledge, never pushed (git history is forever)\n{}/\n",
+        rel.to_string_lossy()
     ));
     std::fs::write(&gitignore, content)?;
     Ok(true)

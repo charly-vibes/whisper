@@ -545,6 +545,8 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
         }
         Commands::Doctor => {
             let report = doctor::run_checks(&facts, &resolved, &cwd);
+            // Advisory leak-shape findings surface in warnings[] too (3.2c).
+            let warnings = doctor::leak_warnings(&facts, &resolved);
             let hint = if report.is_healthy() {
                 "workspace is healthy".to_string()
             } else {
@@ -552,7 +554,7 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
             };
             let data =
                 serde_json::to_value(&report).map_err(|e| WhisperError::new(e.to_string()))?;
-            (data, vec![], Some(hint))
+            (data, warnings, Some(hint))
         }
         Commands::Sync { file } => {
             // Checkout self-protection (add-repo-private-scope 3.1): sync

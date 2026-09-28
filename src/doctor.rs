@@ -2,6 +2,9 @@
 //!
 //! Checks are assembled directly as `CheckEntry`s (config- and git-aware,
 //! so the `DoctorCheck` trait's `repo_root`-only signature doesn't fit).
+//! The private-zone trio (effective ignore, tracked files, leak-shape
+//! lint) is the hard guarantee behind the gitignore backstop: doctor
+//! detects what `init`/`sync` self-heal and what no verb can retract.
 
 use std::path::Path;
 
@@ -10,8 +13,8 @@ use genesis::doctor::{CheckEntry, DoctorReport};
 use crate::config::Resolved;
 use crate::skill_pack;
 use crate::workspace::{
-    Facts, Scope, agents_file, legacy_variants, resolve, scope_files_for, scope_files_for_scoped,
-    turu_injector,
+    Facts, PrivateZoneState, Scope, agents_file, legacy_variants, private_zone_state, resolve,
+    scope_files_for, scope_files_for_scoped, tracked_files_under_private_zone, turu_injector,
 };
 
 const REPO_SLOT: &str = "turu.repo-slot";
@@ -25,6 +28,9 @@ const MANAGED_SKILLS: &str = "turu.managed-skills";
 const ENTRY_FORMAT: &str = "turu.entry-format";
 const DISTILL_PENDING: &str = "turu.distill-pending";
 const USAGE_STALENESS: &str = "turu.usage-staleness";
+const PRIVATE_IGNORE: &str = "turu.private-ignore";
+const PRIVATE_TRACKED: &str = "turu.private-tracked";
+const PRIVATE_LEAKS: &str = "turu.private-leaks";
 
 /// Run all doctor checks for the current checkout.
 pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> DoctorReport {
@@ -330,6 +336,74 @@ pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> Docto
         )
     });
 
+    // Private-zone integrity (add-repo-private-scope 3.2): the checkout
+    // self-protects and self-reports. Gitignore is the backstop, turu is
+    // the guarantee — doctor owns the hard guarantee.
+    checks.push(match private_zone_state(facts) {
+        PrivateZoneState::NoCheckout => CheckEntry::pass(
+            PRIVATE_IGNORE,
+            "private zone is effectively ignored",
+            "no checkout in play — the private zone resolves nowhere",
+        ),
+        PrivateZoneState::Ignored => CheckEntry::pass(
+            PRIVATE_IGNORE,
+            "private zone is effectively ignored",
+            "git check-ignore reports the zone ignored",
+        ),
+        PrivateZoneState::Exposed => with_fix(
+            CheckEntry::warn(
+                PRIVATE_IGNORE,
+                "private zone is effectively ignored",
+                "private zone is not effectively ignored — machine-specific knowledge written there would be committed",
+            ),
+            "turu init",
+        ),
+    });
+
+    let tracked = tracked_files_under_private_zone(facts);
+    checks.push(if tracked.is_empty() {
+        CheckEntry::pass(
+            PRIVATE_TRACKED,
+            "no tracked files under the private zone",
+            "no private knowledge has entered git history",
+        )
+    } else {
+        let list: Vec<String> = tracked
+            .iter()
+            .map(|p| format!("`{}`", p.display()))
+            .collect();
+        CheckEntry::fail(
+            PRIVATE_TRACKED,
+            "no tracked files under the private zone",
+            format!(
+                "tracked under the private zone: [{}] — git history is forever: prevention only, retraction requires rewriting history",
+                list.join(", ")
+            ),
+            Some(
+                "git rm --cached the files and rewrite history (history cannot be retracted by any turu verb)".to_string(),
+            ),
+        )
+    });
+
+    // Advisory leak-shape lint on public repo-local knowledge files.
+    let leaks = leak_warnings(facts, resolved);
+    checks.push(if leaks.is_empty() {
+        CheckEntry::pass(
+            PRIVATE_LEAKS,
+            "public knowledge files carry no leak-shaped content",
+            "no machine paths, hostname assignments, or token-shaped strings",
+        )
+    } else {
+        with_fix(
+            CheckEntry::warn(
+                PRIVATE_LEAKS,
+                "public knowledge files carry no leak-shaped content",
+                leaks.join("; "),
+            ),
+            "move machine-specific knowledge to the --private scope (never pushed)",
+        )
+    });
+
     // Managed block in the agent-facing file.
     let agents = agents_file(repo_root);
     let has_block = agents.exists()
@@ -404,6 +478,166 @@ fn with_fix(mut entry: CheckEntry, fix: &str) -> CheckEntry {
     entry
 }
 
+// ---------------------------------------------------------------------------
+// Leak-shape lint (add-repo-private-scope 3.2c) — advisory
+// ---------------------------------------------------------------------------
+
+/// Machine-path prefixes that betray a specific developer machine.
+const LEAK_PATH_PREFIXES: [&str; 4] = ["C:\\Users\\", "/var/home/", "/home/", "/Users/"];
+
+/// Minimum token length for the token-shaped shape.
+const LEAK_TOKEN_MIN: usize = 32;
+
+/// Advisory leak-shape lint over one text: flag machine paths, hostname
+/// assignments, and token-shaped strings (API keys, PATs, long hex ids).
+/// Detection that warns can be loose; this never blocks anything.
+/// Findings carry 1-based line numbers relative to the linted text.
+pub fn leak_findings(text: &str) -> Vec<String> {
+    let mut findings = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let line_no = n + 1;
+        for prefix in LEAK_PATH_PREFIXES {
+            if let Some(at) = machine_path_at(line, prefix) {
+                findings.push(format!(
+                    "line {line_no}: machine path `{}`",
+                    path_at(&line[at..])
+                ));
+                break;
+            }
+        }
+        if let Some(found) = hostname_assignment(line) {
+            findings.push(format!("line {line_no}: hostname assignment `{found}`"));
+        }
+        for tok in line.split_whitespace() {
+            let t =
+                tok.trim_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'));
+            if is_token_shaped(t) {
+                let shown: String = t.chars().take(16).collect();
+                findings.push(format!(
+                    "line {line_no}: token-shaped string `{shown}…` ({} chars)",
+                    t.len()
+                ));
+            }
+        }
+    }
+    findings
+}
+
+/// Advisory leak warnings for the doctor envelope: lint the public
+/// repo-local knowledge files (repo env.md, branch notes.md). Entry text
+/// is linted, never raw file lines — entry markers carry ids/timestamps
+/// that would false-positive every well-formed file (the whisper-4xl
+/// lesson); freeform lines are user prose and are linted as-is.
+pub fn leak_warnings(facts: &Facts, resolved: &Resolved) -> Vec<String> {
+    if facts.repo_local_root.is_none() {
+        return Vec::new();
+    }
+    let mut warnings = Vec::new();
+    for scope in [Scope::Repo, Scope::Branch] {
+        let Ok(target) = resolve(scope, facts, resolved) else {
+            continue;
+        };
+        if crate::workspace::is_in_private_zone(&target.path, facts) || !target.path.exists() {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(&target.path) else {
+            continue;
+        };
+        let mut linted: Vec<String> = Vec::new();
+        for item in crate::entry::parse_file(&raw) {
+            match item {
+                crate::entry::Item::Entry(e) => linted.extend(leak_findings(&e.text)),
+                crate::entry::Item::Line(l) => {
+                    if !l.trim().is_empty() {
+                        linted.extend(leak_findings(&l));
+                    }
+                }
+            }
+        }
+        if !linted.is_empty() {
+            warnings.push(format!(
+                "leak-shaped content in `{}`: {}",
+                target.path.display(),
+                linted.join(", ")
+            ));
+        }
+    }
+    warnings
+}
+
+/// Start of a machine path at a word boundary (not inside another word —
+/// `/var/home/` contains `/home/` but only as a non-boundary suffix).
+fn machine_path_at(line: &str, prefix: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(idx) = line[from..].find(prefix) {
+        let at = from + idx;
+        let boundary = at == 0
+            || !line[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric());
+        if boundary {
+            return Some(at);
+        }
+        from = at + prefix.len().max(1);
+    }
+    None
+}
+
+/// Path string starting at `at`: extends over alphanumerics and `/-_.~`.
+fn path_at(rest: &str) -> String {
+    rest.chars()
+        .take_while(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_' | '.' | '~' | '\\')
+        })
+        .collect()
+}
+
+/// A `host:`/`hostname=`-shaped assignment: the word `host` (optionally
+/// `name`), optional spaces, `:` or `=`, then a value. Word-bounded so
+/// `localhost:8080` stays quiet. Returns the assigned value.
+fn hostname_assignment(line: &str) -> Option<String> {
+    let lower = line.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(idx) = lower[from..].find("host") {
+        let at = from + idx;
+        let boundary = at == 0
+            || !lower[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric());
+        if boundary {
+            let after = &lower[at + 4..];
+            let after = after.strip_prefix("name").unwrap_or(after);
+            let value_part = after.trim_start();
+            if let Some(v) = value_part
+                .strip_prefix(':')
+                .or_else(|| value_part.strip_prefix('='))
+            {
+                let v = v.trim();
+                if !v.is_empty() {
+                    let end = v.find(char::is_whitespace).unwrap_or(v.len());
+                    return Some(v[..end].to_string());
+                }
+            }
+        }
+        from = at + 4;
+    }
+    None
+}
+
+/// Token-shaped: long (≥32) run of alphanumerics/`_-` containing both a
+/// digit and a letter — API keys, PATs, long hex ids. Hex words without
+/// digits (`deadbeef…`) stay quiet.
+fn is_token_shaped(tok: &str) -> bool {
+    tok.len() >= LEAK_TOKEN_MIN
+        && tok
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        && tok.chars().any(|c| c.is_ascii_digit())
+        && tok.chars().any(|c| c.is_ascii_alphabetic())
+}
+
 fn short_id(id: &str) -> &str {
     &id[..id.len().min(12)]
 }
@@ -415,5 +649,71 @@ fn scope_name(scope: Scope) -> &'static str {
         Scope::Branch => "branch",
         Scope::Worktree => "worktree",
         Scope::Group => "group",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn leak_lint_flags_machine_paths() {
+        for p in [
+            "/home/sasha/infra",
+            "/Users/sasha/infra",
+            "/var/home/sasha/infra",
+            "C:\\Users\\sasha",
+        ] {
+            let findings = leak_findings(&format!("deploy runs from {p}"));
+            assert!(
+                findings.iter().any(|m| m.contains("machine path")),
+                "{p}: {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn leak_lint_flags_hostname_assignments() {
+        let findings = leak_findings("built on host: sasha-fedora and hostname=brix");
+        assert!(
+            findings.iter().any(|m| m.contains("hostname")),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn leak_lint_flags_token_shaped_strings() {
+        for tok in [
+            "ghp_0123456789abcdef0123456789abcdef0123",
+            "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        ] {
+            let findings = leak_findings(&format!("token {tok}"));
+            assert!(
+                findings.iter().any(|m| m.contains("token-shaped")),
+                "{tok}: {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn leak_lint_stays_quiet_on_ordinary_lessons() {
+        assert!(
+            leak_findings("prefer O_APPEND fast path; full rewrite only for --supersedes")
+                .is_empty()
+        );
+        assert!(leak_findings("entry ids are sha256 over scope-key+ts+text").is_empty());
+        assert!(leak_findings("ts 2026-09-28T21:48:17Z").is_empty());
+        // Hex words without digits never trip the token shape.
+        assert!(
+            leak_findings("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef is not a token").is_empty()
+        );
+    }
+
+    #[test]
+    fn leak_lint_reports_line_numbers() {
+        let findings = leak_findings("ok line\n/home/sasha/infra here");
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].contains("line 2"), "{findings:?}");
+        assert!(findings[0].contains("/home/sasha/infra"), "{findings:?}");
     }
 }
