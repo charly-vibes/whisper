@@ -58,7 +58,10 @@ fn scope_order(recall: &RecallScope, resolved: &Resolved) -> Vec<Scope> {
     }
 }
 
-/// Serve the ranked slice for the requested scope(s).
+/// Serve the ranked slice for the requested scope(s). When `record_usage`
+/// is true, every entry actually served gets one usage record appended to
+/// its scope's sidecar (filtered and budget-skipped entries are never
+/// recorded — usage only counts what recall served).
 pub fn recall(
     recall_scope: &RecallScope,
     facts: &Facts,
@@ -66,12 +69,20 @@ pub fn recall(
     topic: Option<&str>,
     budget: Option<usize>,
     include_superseded: bool,
+    record_usage: bool,
 ) -> Result<Value> {
     let mut entries: Vec<Served> = Vec::new();
     let mut lines: Vec<ServedLine> = Vec::new();
     let mut served_bytes = 0usize;
     let mut entries_skipped = 0usize;
     let mut freeform_skipped = 0usize;
+    // Entry ids served per scope file, recorded to the usage sidecar after
+    // serving (skip-on-error: recall must never fail because telemetry
+    // cannot write — read-only workspaces still recall).
+    let mut usage_order: Vec<std::path::PathBuf> = Vec::new();
+    let mut usage_batch: std::collections::HashMap<std::path::PathBuf, Vec<String>> =
+        std::collections::HashMap::new();
+    let now = entry::parse_or_now(std::env::var("TURU_NOW").ok().as_deref())?;
 
     for scope in scope_order(recall_scope, resolved) {
         // One-scope recall surfaces resolve errors (e.g. `group` with no
@@ -114,6 +125,15 @@ pub fn recall(
                 Some(b) if served_bytes + cost > b => entries_skipped += 1,
                 _ => {
                     served_bytes += cost;
+                    if record_usage {
+                        usage_batch
+                            .entry(target.path.clone())
+                            .or_insert_with(|| {
+                                usage_order.push(target.path.clone());
+                                Vec::new()
+                            })
+                            .push(e.id.clone());
+                    }
                     entries.push(Served {
                         scope: scope_name,
                         entry: e,
@@ -136,6 +156,14 @@ pub fn recall(
         }
     }
 
+    // One sidecar per scope file touched (O_APPEND); best-effort by design.
+    let mut recorded = 0usize;
+    for path in &usage_order {
+        if let Some(ids) = usage_batch.get_mut(path) {
+            recorded += crate::usage::append(path, ids, &now).unwrap_or(0);
+        }
+    }
+
     if entries.is_empty() && lines.is_empty() && entries_skipped == 0 {
         return Err(WhisperError::new("nothing to recall in this scope")
             .with_suggestion("turu init to create the layout, or append entries first"));
@@ -153,6 +181,7 @@ pub fn recall(
         "budget_unused": budget.map(|b| b.saturating_sub(served_bytes)),
         "entries_skipped": entries_skipped,
         "freeform_skipped": freeform_skipped,
+        "usage_recorded": record_usage.then_some(recorded),
     }))
 }
 

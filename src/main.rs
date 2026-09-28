@@ -79,6 +79,9 @@ enum Commands {
         /// Include superseded entries.
         #[arg(long)]
         include_superseded: bool,
+        /// Read-only recall: skip usage telemetry (sidecar untouched).
+        #[arg(long)]
+        no_usage: bool,
     },
     /// Two-phase distill contract: snapshot, agent rewrites, guarded commit.
     Distill {
@@ -318,6 +321,7 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
             topic,
             budget,
             include_superseded,
+            no_usage,
         } => {
             let recall_scope = recall::parse_recall_scope(scope)?;
             let data = recall::recall(
@@ -327,6 +331,7 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                 topic.as_deref(),
                 *budget,
                 *include_superseded,
+                !*no_usage,
             )?;
             (
                 data,
@@ -355,6 +360,7 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                         "working_path": rev.working_path,
                         "target_path": rev.target_path,
                         "sha256": rev.sha256,
+                        "recency": rev.recency,
                     }),
                     vec![],
                     Some(format!(

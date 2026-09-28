@@ -21,6 +21,7 @@ const MANAGED_BLOCK: &str = "turu.managed-block";
 const MANAGED_SKILLS: &str = "turu.managed-skills";
 const ENTRY_FORMAT: &str = "turu.entry-format";
 const DISTILL_PENDING: &str = "turu.distill-pending";
+const USAGE_STALENESS: &str = "turu.usage-staleness";
 
 /// Run all doctor checks for the current checkout.
 pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> DoctorReport {
@@ -266,6 +267,77 @@ pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> Docto
         )
     });
 
+    // Usage staleness (whisper-t6j): per-scope verdicts against the Ro5
+    // gates — last_recalled > 90d, or never-recalled with entry age > 30d.
+    // Usage lives in machine-local sidecars; absent sidecars mean telemetry
+    // hasn't started, which is a pass, not a warning.
+    let now = crate::entry::parse_or_now(std::env::var("TURU_NOW").ok().as_deref()).ok();
+    let mut stale: Vec<String> = Vec::new();
+    let mut never_used: Vec<String> = Vec::new();
+    for scope in [Scope::Global, Scope::Repo, Scope::Branch, Scope::Worktree] {
+        let target = resolve(scope, facts, resolved)
+            .ok()
+            .filter(|t| t.path.exists());
+        let Some(target) = target else { continue };
+        let raw = match std::fs::read_to_string(&target.path) {
+            Ok(raw) => raw,
+            Err(_) => continue,
+        };
+        let stats = crate::usage::read_stats(&target.path);
+        for item in crate::entry::parse_file(&raw) {
+            let crate::entry::Item::Entry(e) = item else {
+                continue;
+            };
+            if e.superseded_by.is_some() {
+                continue; // superseded entries are dead by decision, not by staleness
+            }
+            let verdict = match (&now, stats.get(&e.id)) {
+                (Some(now), stats) => crate::usage::staleness(&e.ts, stats, now),
+                (None, _) => crate::usage::Staleness::Fresh,
+            };
+            match verdict {
+                crate::usage::Staleness::Stale => {
+                    stale.push(format!("{} ({})", short_id(&e.id), scope_name(scope)));
+                }
+                crate::usage::Staleness::NeverUsed => {
+                    never_used.push(format!("{} ({})", short_id(&e.id), scope_name(scope)));
+                }
+                crate::usage::Staleness::Fresh => {}
+            }
+        }
+    }
+    checks.push(if stale.is_empty() && never_used.is_empty() {
+        CheckEntry::pass(
+            USAGE_STALENESS,
+            "entries show no usage staleness",
+            "all entries recently recalled or within the never-used grace window",
+        )
+    } else {
+        let mut parts: Vec<String> = Vec::new();
+        if !stale.is_empty() {
+            parts.push(format!(
+                "stale (last recalled > {}d ago): [{}]",
+                crate::usage::STALE_DAYS,
+                stale.join(", ")
+            ));
+        }
+        if !never_used.is_empty() {
+            parts.push(format!(
+                "never recalled (older than {}d grace): [{}]",
+                crate::usage::GRACE_DAYS,
+                never_used.join(", ")
+            ));
+        }
+        with_fix(
+            CheckEntry::warn(
+                USAGE_STALENESS,
+                "entries show no usage staleness",
+                parts.join(" — "),
+            ),
+            "distill the stale scopes and prune dead entries (recall usage only counts what was actually served)",
+        )
+    });
+
     // Managed block in the agent-facing file.
     let agents = agents_file(repo_root);
     let has_block = agents.exists()
@@ -338,4 +410,18 @@ pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> Docto
 fn with_fix(mut entry: CheckEntry, fix: &str) -> CheckEntry {
     entry.fix = Some(fix.to_string());
     entry
+}
+
+fn short_id(id: &str) -> &str {
+    &id[..id.len().min(12)]
+}
+
+fn scope_name(scope: Scope) -> &'static str {
+    match scope {
+        Scope::Global => "global",
+        Scope::Repo => "repo",
+        Scope::Branch => "branch",
+        Scope::Worktree => "worktree",
+        Scope::Group => "group",
+    }
 }

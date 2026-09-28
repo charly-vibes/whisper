@@ -15,6 +15,7 @@ pub mod doctor;
 pub mod entry;
 pub mod recall;
 pub mod skill_pack;
+pub mod usage;
 pub mod workspace;
 
 /// Version of the CLI, injected from Cargo.

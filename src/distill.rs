@@ -18,6 +18,11 @@ pub struct Revision {
     pub working_path: std::path::PathBuf,
     pub target_path: std::path::PathBuf,
     pub sha256: String,
+    /// Per-entry usage stats (entry id → use_count/last_recalled) so the
+    /// rewrite pass can prune dead entries. Omitted when the sidecar is
+    /// absent (no telemetry yet).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recency: Option<std::collections::BTreeMap<String, crate::usage::Stats>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -56,6 +61,15 @@ pub fn begin(target: &Target, ts: &str) -> Result<Revision> {
     let snapshot_path = rev_dir.join("snapshot.md");
     let working_path = rev_dir.join("working.md");
     fs::write(&snapshot_path, &raw).map_err(WhisperError::from)?;
+    // Recency signal for the rewrite pass: usage stats for the entries in
+    // this snapshot (empty map when the sidecar is absent → omitted).
+    let items = entry::parse_file(&raw);
+    let recency_map = crate::usage::recency_for(&items, &target.path);
+    let recency = if recency_map.is_empty() {
+        None
+    } else {
+        Some(recency_map)
+    };
     // The agent rewrites `working.md`; commit verifies the live file did not
     // drift since this snapshot.
     fs::write(
@@ -76,6 +90,7 @@ pub fn begin(target: &Target, ts: &str) -> Result<Revision> {
         working_path,
         target_path: target.path.clone(),
         sha256: sha,
+        recency,
     })
 }
 

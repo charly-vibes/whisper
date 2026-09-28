@@ -497,6 +497,220 @@ fn recall_scope_enum_untouched_all_is_recall_level() {
 }
 
 // ---------------------------------------------------------------------------
+// add-usage-telemetry (whisper-t6j)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn recall_writes_usage_records_for_served_entries() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "served fact"])
+        .assert()
+        .success();
+
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-05T00:00:00Z")
+        .args(["recall", "repo", "--json"])
+        .assert()
+        .success();
+
+    let path = resolve_repo_path(&home, &repo);
+    let usage = std::fs::read_to_string(path.with_extension("usage.jsonl"))
+        .expect("usage sidecar must exist next to the scope file");
+    let id = extract_id(&path, "served fact");
+    let line = usage.lines().find(|l| l.contains(&id)).unwrap();
+    let rec: serde_json::Value = serde_json::from_str(line).unwrap();
+    assert_eq!(rec["id"].as_str().unwrap(), id);
+    assert_eq!(rec["ts"].as_str().unwrap(), "2026-01-05T00:00:00Z");
+}
+
+#[test]
+fn recall_usage_counts_only_served_entries() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    // Two entries; the topic-filtered one is never served.
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "used entry", "--topic", "hot"])
+        .assert()
+        .success();
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-02T00:00:00Z")
+        .args([
+            "append",
+            "repo",
+            "--text",
+            "filtered entry",
+            "--topic",
+            "cold",
+        ])
+        .assert()
+        .success();
+    let path = resolve_repo_path(&home, &repo);
+    let used_id = extract_id(&path, "used entry");
+    let filtered_id = extract_id(&path, "filtered entry");
+
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-05T00:00:00Z")
+        .args(["recall", "repo", "--topic", "hot", "--json"])
+        .assert()
+        .success();
+
+    let usage = std::fs::read_to_string(path.with_extension("usage.jsonl")).unwrap();
+    assert_eq!(usage.matches(&used_id).count(), 1, "served = recorded");
+    assert_eq!(usage.matches(&filtered_id).count(), 0, "filtered ≠ used");
+
+    // Budget-skipped entries are also never recorded.
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-06T00:00:00Z")
+        .args(["recall", "repo", "--budget", "10", "--json"])
+        .assert()
+        .success();
+    let usage = std::fs::read_to_string(path.with_extension("usage.jsonl")).unwrap();
+    assert_eq!(usage.matches(&used_id).count(), 1, "budget-skipped ≠ used");
+    assert_eq!(usage.matches(&filtered_id).count(), 0);
+}
+
+#[test]
+fn recall_no_usage_leaves_no_sidecar() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "quiet fact"])
+        .assert()
+        .success();
+
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-05T00:00:00Z")
+        .args(["recall", "repo", "--no-usage", "--json"])
+        .assert()
+        .success();
+
+    let path = resolve_repo_path(&home, &repo);
+    assert!(
+        !path.with_extension("usage.jsonl").exists(),
+        "--no-usage must not create the sidecar"
+    );
+}
+
+#[test]
+fn usage_sidecar_is_append_only_and_tolerates_corruption() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "twice served"])
+        .assert()
+        .success();
+    let path = resolve_repo_path(&home, &repo);
+    // Pre-seed a corrupt line: readers must skip it, writers must keep it.
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path.with_extension("usage.jsonl"), "not json at all\n").unwrap();
+
+    for now in ["2026-01-05T00:00:00Z", "2026-01-06T00:00:00Z"] {
+        turu(&home, &repo)
+            .env("TURU_NOW", now)
+            .args(["recall", "repo", "--json"])
+            .assert()
+            .success();
+    }
+
+    let usage = std::fs::read_to_string(path.with_extension("usage.jsonl")).unwrap();
+    assert!(
+        usage.starts_with("not json at all\n"),
+        "append-only: corrupt line untouched"
+    );
+    assert_eq!(usage.matches("twice served").count(), 0); // sanity: ids are sha2, not text
+    let records: Vec<&str> = usage.lines().filter(|l| l.starts_with('{')).collect();
+    assert_eq!(records.len(), 2, "one record per served recall");
+    let rec: serde_json::Value = serde_json::from_str(records[0]).unwrap();
+    assert_eq!(rec["ts"].as_str().unwrap(), "2026-01-05T00:00:00Z");
+}
+
+#[test]
+fn doctor_warns_on_stale_and_never_used_entries() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    // Fresh: used entry + never-used entry.
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "hot fact", "--topic", "hot"])
+        .assert()
+        .success();
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:01Z")
+        .args(["append", "repo", "--text", "cold fact", "--topic", "cold"])
+        .assert()
+        .success();
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-02T00:00:00Z")
+        .args(["recall", "repo", "--topic", "hot", "--json"])
+        .assert()
+        .success();
+
+    // Both fresh, both recently recalled / in grace → pass.
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-03T00:00:00Z")
+        .args(["doctor", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("turu.usage-staleness"))
+        .stdout(contains("\"status\":\"pass\""));
+
+    // 120 days later: hot is stale (>90d since last recall), cold is
+    // beyond the 30d grace and never used.
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-05-02T00:00:00Z")
+        .args(["doctor", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("turu.usage-staleness"))
+        .stdout(contains("never recalled"))
+        .stdout(contains("stale"));
+}
+
+#[test]
+fn distill_begin_exposes_entry_recency() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "recency tracked fact"])
+        .assert()
+        .success();
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-02T00:00:00Z")
+        .args(["recall", "repo", "--json"])
+        .assert()
+        .success();
+
+    let out = String::from_utf8(
+        turu(&home, &repo)
+            .env("TURU_NOW", "2026-01-05T00:00:00Z")
+            .args(["distill", "repo", "--begin", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(
+        out.contains("\"recency\""),
+        "begin must expose per-entry recency: {out}"
+    );
+    let data: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let recency = data["data"]["recency"]
+        .as_object()
+        .expect("recency must be an object keyed by entry id");
+    let id = extract_id(&resolve_repo_path(&home, &repo), "recency tracked fact");
+    let r = &recency[&id];
+    assert_eq!(r["use_count"].as_u64().unwrap(), 1);
+    assert_eq!(r["last_recalled"].as_str().unwrap(), "2026-01-02T00:00:00Z");
+}
+
+// ---------------------------------------------------------------------------
 // add-distill-contract
 // ---------------------------------------------------------------------------
 
