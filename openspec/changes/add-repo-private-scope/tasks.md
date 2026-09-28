@@ -12,10 +12,10 @@ Depends on: `add-shared-bundle` archived (its `shared-store` spec must exist in 
 
 - [x] 2.1 RED/GREEN: `turu append --private` routes into `.whisper/private/` mirroring the repo-local layout (`private/env.md`, `private/branches/<slug>/notes.md`) (whisper-eiy)
 - [x] 2.2 RED/GREEN: recall includes the private zone (private + repo-local + global composition) (whisper-eiy)
-- [ ] 2.3 RED/GREEN: `bundle pack` never includes anything under `.whisper/private/` (exact-path exclusion; a `private/` nested elsewhere is NOT excluded)
-- [ ] 2.4 RED/GREEN: `bundle unpack` never creates files under `.whisper/private/`
-- [ ] 2.5 RED/GREEN: `turu bundle pack` refuses any scope resolving under `.whisper/private/` — clear error, no bundle produced (unit-level guard binding future routing changes)
-- [ ] 2.6 RED/GREEN: consolidate regression guard — legacy-variant detection operates only on the workspace root; no checkout path (incl. `.whisper/private/`) is ever an input to a move or merge
+- [x] 2.3 RED/GREEN: `bundle pack` never includes anything under `.whisper/private/` (exact-path exclusion; a `private/` nested elsewhere is NOT excluded) (whisper-4xo)
+- [x] 2.4 RED/GREEN: `bundle unpack` never creates files under `.whisper/private/` (whisper-4xo)
+- [x] 2.5 RED/GREEN: `turu bundle pack` refuses any scope resolving under `.whisper/private/` — clear error, no bundle produced (unit-level guard binding future routing changes) (whisper-4xo)
+- [x] 2.6 RED/GREEN: consolidate regression guard — legacy-variant detection operates only on the workspace root; no checkout path (incl. `.whisper/private/`) is ever an input to a move or merge (whisper-4xo)
 
 ## 3. Ignore rule + doctor (TDD: red→green)
 

@@ -535,20 +535,36 @@ pub fn private_zone_target(scope: Scope, facts: &Facts, _resolved: &Resolved) ->
                 }),
         );
     }
-    let root = facts.repo_local_root.as_ref().ok_or_else(|| {
+    let root = private_zone_root(facts).ok_or_else(|| {
         WhisperError::new("--private requires a git checkout")
             .with_suggestion("the private zone lives in <checkout>/.whisper/private/ — use --global to write the machine-local store instead")
     })?;
     let path = match scope {
-        Scope::Repo => root.join("private").join("env.md"),
+        Scope::Repo => root.join("env.md"),
         Scope::Branch => root
-            .join("private")
             .join("branches")
             .join(&facts.branch_slug)
             .join("notes.md"),
         _ => unreachable!("scope gate above"),
     };
     Ok(Target { scope, path })
+}
+
+/// The checkout's private zone root: the exact top-level path
+/// `.whisper/private/`. `None` outside a checkout — the zone is a checkout
+/// concept.
+pub fn private_zone_root(facts: &Facts) -> Option<PathBuf> {
+    facts
+        .repo_local_root
+        .as_ref()
+        .map(|root| root.join("private"))
+}
+
+/// True when `path` lies under the checkout's private zone. Component-wise
+/// prefix match: `.whisper/privateX/` and a `private/` nested deeper do NOT
+/// inherit the guarantee — the boundary is the exact top-level path.
+pub fn is_in_private_zone(path: &Path, facts: &Facts) -> bool {
+    private_zone_root(facts).is_some_and(|zone| path.starts_with(zone))
 }
 
 // ---------------------------------------------------------------------------
@@ -731,6 +747,17 @@ pub struct ConsolidateReport {
 pub fn consolidate(facts: &Facts, resolved: &Resolved) -> Result<ConsolidateReport> {
     let repos_dir = resolved.knowledge_root().join("repos");
     let canonical_dir = repos_dir.join(&facts.repo_key);
+    // Regression guard (add-repo-private-scope 2.6): the private zone is
+    // never an input to a move or merge. Unreachable today — consolidate
+    // scans only the workspace root's repos/ dir — but binding: if routing
+    // ever relocates the knowledge root into the checkout, the zone stays
+    // structurally excluded.
+    if is_in_private_zone(&canonical_dir, facts) {
+        return Err(WhisperError::new(
+            "refusing to consolidate: the canonical repo dir lies under the checkout's private zone",
+        )
+        .with_suggestion("the private zone is never moved, merged, or removed by any verb"));
+    }
     let variants = legacy_variants(facts, resolved);
     let mut report = ConsolidateReport {
         variants: variants.clone(),
@@ -929,6 +956,75 @@ mod tests {
             variants,
             vec!["host:whisper".to_string(), "whisper".to_string()]
         );
+    }
+
+    #[test]
+    fn consolidate_refuses_when_the_canonical_dir_lies_under_the_private_zone() {
+        // whisper-4xo (2.6): regression guard — if routing ever relocates
+        // the knowledge root into the checkout's private zone, consolidate
+        // must refuse rather than move or merge anything under it.
+        let tmp = tempfile::tempdir().unwrap();
+        let facts = Facts {
+            repo_key: "github.com/u/whisper".into(),
+            branch_slug: "main".into(),
+            worktree_slot: ".git".into(),
+            repo_local_root: Some(tmp.path().join(".whisper")),
+        };
+        let resolved = Resolved {
+            workspace_root: tmp.path().join(".whisper/private"),
+            group: None,
+            shadowed_global_root: None,
+        };
+        // A legacy variant with content, so the pre-guard code would act.
+        let variant = tmp.path().join(".whisper/private/repos/whisper/env.md");
+        std::fs::create_dir_all(variant.parent().unwrap()).unwrap();
+        std::fs::write(&variant, "legacy line\n").unwrap();
+
+        let err = consolidate(&facts, &resolved).unwrap_err();
+        assert!(err.to_string().contains("private zone"), "{err}");
+        // Nothing moved, merged, or removed under the zone.
+        assert_eq!(std::fs::read_to_string(&variant).unwrap(), "legacy line\n");
+    }
+
+    #[test]
+    fn private_zone_is_the_exact_top_level_path_only() {
+        // whisper-4xo: a `private/` name nested deeper or with siblings
+        // does NOT inherit the guarantee.
+        let facts = Facts {
+            repo_key: "github.com/u/r".into(),
+            branch_slug: "main".into(),
+            worktree_slot: ".git".into(),
+            repo_local_root: Some(PathBuf::from("/checkout/.whisper")),
+        };
+        assert!(is_in_private_zone(
+            &PathBuf::from("/checkout/.whisper/private/env.md"),
+            &facts
+        ));
+        assert!(is_in_private_zone(
+            &PathBuf::from("/checkout/.whisper/private/branches/main/notes.md"),
+            &facts
+        ));
+        assert!(!is_in_private_zone(
+            &PathBuf::from("/checkout/.whisper/privateX/env.md"),
+            &facts
+        ));
+        assert!(!is_in_private_zone(
+            &PathBuf::from("/checkout/.whisper/branches/main/private/notes.md"),
+            &facts
+        ));
+        assert!(!is_in_private_zone(
+            &PathBuf::from("/checkout/.whisper/env.md"),
+            &facts
+        ));
+        // Outside a checkout there is no zone at all.
+        let detached = Facts {
+            repo_local_root: None,
+            ..facts
+        };
+        assert!(!is_in_private_zone(
+            &PathBuf::from("/checkout/.whisper/private/env.md"),
+            &detached
+        ));
     }
 
     #[test]

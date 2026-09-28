@@ -461,6 +461,125 @@ fn private_zone_is_exact_path_only() {
         .failure(); // nothing servable in this scope — nested dir invisible
 }
 
+// whisper-4xo — tasks 2.3–2.6 of add-repo-private-scope: transport and
+// migration verbs can never carry or touch the private zone. "Detection
+// that warns can be loose; anything that moves or publishes data cannot."
+
+#[test]
+fn pack_excludes_the_private_zone_and_reports_the_count() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    turu(tmp.path(), &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "branch", "--text", "committed fact"])
+        .assert()
+        .success();
+    turu(tmp.path(), &repo)
+        .env("TURU_NOW", "2026-01-02T00:00:00Z")
+        .args(["append", "branch", "--private", "--text", "machine-secret"])
+        .assert()
+        .success();
+    // Exact-path rule: a privateX sibling is ordinary content — never
+    // counted, never excluded as if it were the zone.
+    let decoy = repo.join(".whisper/privateX/branches/main");
+    std::fs::create_dir_all(&decoy).unwrap();
+    std::fs::write(decoy.join("notes.md"), "- decoy entry\n").unwrap();
+
+    let out = String::from_utf8(
+        turu(tmp.path(), &repo)
+            .args(["bundle", "pack", "branch", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(out.contains("committed fact"));
+    assert!(
+        !out.contains("machine-secret"),
+        "private text in bundle: {out}"
+    );
+    assert!(out.contains("\"private_excluded\":1"), "{out}");
+}
+
+#[test]
+fn store_packed_bundle_unpacks_into_the_repo_local_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    // Pre-decision-A style: pack the workspace-root store (done here from
+    // outside any checkout, where repo scope resolves to the store).
+    turu(tmp.path(), tmp.path())
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "legacy packed fact"])
+        .assert()
+        .success();
+    turu(tmp.path(), tmp.path())
+        .args(["bundle", "pack", "repo", "--out", "bundle.json", "--json"])
+        .assert()
+        .success();
+
+    // Unpack in the checkout: entries land at the current-resolution path
+    // (the repo-local root), extend-never-overwrite unchanged.
+    turu(tmp.path(), &repo)
+        .args(["bundle", "unpack", "--file", "../bundle.json", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("\"added\":1"));
+    let landed = std::fs::read_to_string(repo.join(".whisper/env.md")).unwrap();
+    assert!(landed.contains("legacy packed fact"), "{landed}");
+}
+
+#[test]
+fn consolidate_leaves_the_checkout_private_zone_untouched() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    // Relocate the knowledge root into the checkout (repo-private
+    // workspace_root override) — the closest consolidate can legally get
+    // to checkout-local knowledge today.
+    std::fs::create_dir_all(repo.join(".whisper")).unwrap();
+    std::fs::write(
+        repo.join(".whisper/config.toml"),
+        format!("workspace_root = '{}'\n", repo.join(".whisper").display()),
+    )
+    .unwrap();
+    // A real legacy variant in the store, plus a decoy under the private
+    // zone that looks exactly like one.
+    let variant = repo.join(".whisper/repos/whisper");
+    std::fs::create_dir_all(&variant).unwrap();
+    std::fs::write(variant.join("env.md"), "legacy line\n").unwrap();
+    let decoy = repo.join(".whisper/private/repos/whisper");
+    std::fs::create_dir_all(&decoy).unwrap();
+    std::fs::write(decoy.join("env.md"), "private line\n").unwrap();
+
+    let out = String::from_utf8(
+        turu(tmp.path(), &repo)
+            .args(["consolidate", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(
+        out.contains("repos/cv/charly-vibes/whisper"),
+        "variant not migrated: {out}"
+    );
+    assert!(
+        !variant.join("env.md").exists(),
+        "legacy variant not consumed"
+    );
+    // The private zone is untouched: decoy still there, never reported.
+    assert_eq!(
+        std::fs::read_to_string(decoy.join("env.md")).unwrap(),
+        "private line\n"
+    );
+    assert!(!out.contains("private/repos"), "{out}");
+}
+
 #[test]
 fn init_provisions_the_escape_hatch_layer() {
     let tmp = tempfile::tempdir().unwrap();
