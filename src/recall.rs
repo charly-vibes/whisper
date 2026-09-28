@@ -2,7 +2,10 @@
 //!
 //! turu serves mechanically (filter, rank, budget); *when* to call recall
 //! is the agent's policy. Whole-entry atomicity: an entry that does not fit
-//! the budget is skipped in its entirety, never truncated.
+//! the budget is skipped in its entirety, never truncated. For repo/branch
+//! scopes the composition is store-major across three layers: committed
+//! repo-local file, private zone (read-included here — publication verbs,
+//! not recall, own exclusion), then the machine-local store.
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -70,19 +73,34 @@ fn stores_for(recall: &RecallScope, facts: &Facts, resolved: &Resolved) -> Resul
     let one = |scope: Scope| -> Result<Vec<Store>> {
         match scope {
             Scope::Repo | Scope::Branch => {
-                let checkout = facts.repo_local_root.as_ref().map(|root| match scope {
-                    Scope::Repo => root.join("env.md"),
-                    Scope::Branch => root
-                        .join("branches")
-                        .join(&facts.branch_slug)
-                        .join("notes.md"),
-                    _ => unreachable!(),
-                });
+                // Checkout layer in store-major order: the committed
+                // repo-local file, then the private zone (read-included,
+                // publish-excluded — a recall never publishes), then the
+                // machine-local store as the fallback layer.
                 let mut stores = Vec::new();
-                if let Some(path) = checkout {
+                if let Some(root) = &facts.repo_local_root {
                     stores.push(Store {
                         scope,
-                        path: Some(path),
+                        path: Some(match scope {
+                            Scope::Repo => root.join("env.md"),
+                            Scope::Branch => root
+                                .join("branches")
+                                .join(&facts.branch_slug)
+                                .join("notes.md"),
+                            _ => unreachable!(),
+                        }),
+                    });
+                    stores.push(Store {
+                        scope,
+                        path: Some(match scope {
+                            Scope::Repo => root.join("private").join("env.md"),
+                            Scope::Branch => root
+                                .join("private")
+                                .join("branches")
+                                .join(&facts.branch_slug)
+                                .join("notes.md"),
+                            _ => unreachable!(),
+                        }),
                     });
                 }
                 stores.push(Store {

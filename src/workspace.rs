@@ -1,7 +1,10 @@
 //! Core deterministic logic: facts derivation, scope routing, layout ops.
 //!
 //! Everything here is a pure function of (git facts, config). The same
-//! checkout must always resolve to the same paths on every machine.
+//! checkout must always resolve to the same paths on every machine. The
+//! private zone (`.whisper/private/`) is one of those pure resolutions:
+//! a path, not a policy — defined only for repo/branch scopes inside a
+//! checkout, and written only by explicit private-scope operations.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -163,12 +166,15 @@ pub fn managed_block_content(facts: &Facts, resolved: &Resolved) -> Result<Strin
         resolve(scope, &f, resolved).map(|t| t.path)
     };
     let store_layer = if facts.repo_local_root.is_some() {
+        let private_of = |scope| private_zone_target(scope, facts, resolved).map(|t| t.path);
         format!(
-            "  - append/resolve default: repo → {}, branch → {}\n  - `--global` escape hatch: repo → {}, branch → {}\n",
+            "  - append/resolve default: repo → {}, branch → {}\n  - `--global` escape hatch: repo → {}, branch → {}\n  - `--private` zone (never pushed): repo → {}, branch → {}\n",
             fmt(path_of(Scope::Repo)).unwrap_or_else(|_| "(unavailable)".into()),
             fmt(path_of(Scope::Branch)).unwrap_or_else(|_| "(unavailable)".into()),
             fmt(store_of(Scope::Repo)).unwrap_or_else(|_| "(unavailable)".into()),
             fmt(store_of(Scope::Branch)).unwrap_or_else(|_| "(unavailable)".into()),
+            fmt(private_of(Scope::Repo)).unwrap_or_else(|_| "(unavailable)".into()),
+            fmt(private_of(Scope::Branch)).unwrap_or_else(|_| "(unavailable)".into()),
         )
     } else {
         String::new()
@@ -508,6 +514,41 @@ pub fn resolve(scope: Scope, facts: &Facts, resolved: &Resolved) -> Result<Targe
         }
     };
     Ok(target)
+}
+
+/// Private-zone destination for `repo`/`branch` scopes: the repo-local
+/// layout mirrored under `<checkout>/.whisper/private/` (gitignored, never
+/// pushed — privacy is a path, not a policy). Defined only for those two
+/// scopes and only inside a checkout: the private zone is a checkout
+/// concept, and no verb writes here except explicit private routing.
+pub fn private_zone_target(scope: Scope, facts: &Facts, _resolved: &Resolved) -> Result<Target> {
+    if !matches!(scope, Scope::Repo | Scope::Branch) {
+        return Err(
+            WhisperError::new("--private applies only to the repo and branch scopes")
+                .with_suggestion(match scope {
+                    Scope::Global => "global always writes to the workspace root — drop --private",
+                    Scope::Worktree => {
+                        "worktree always writes to the workspace root — drop --private"
+                    }
+                    Scope::Group => "group always writes to the group root — drop --private",
+                    _ => unreachable!("scope gate above"),
+                }),
+        );
+    }
+    let root = facts.repo_local_root.as_ref().ok_or_else(|| {
+        WhisperError::new("--private requires a git checkout")
+            .with_suggestion("the private zone lives in <checkout>/.whisper/private/ — use --global to write the machine-local store instead")
+    })?;
+    let path = match scope {
+        Scope::Repo => root.join("private").join("env.md"),
+        Scope::Branch => root
+            .join("private")
+            .join("branches")
+            .join(&facts.branch_slug)
+            .join("notes.md"),
+        _ => unreachable!("scope gate above"),
+    };
+    Ok(Target { scope, path })
 }
 
 // ---------------------------------------------------------------------------

@@ -290,6 +290,177 @@ fn same_text_in_both_layers_stays_two_distinct_entries() {
     assert_eq!(out.matches("stated twice").count(), 2);
 }
 
+// whisper-eiy — tasks 2.1–2.2 of add-repo-private-scope: the private zone
+// (`<checkout>/.whisper/private/`, gitignored) is a deterministic routing
+// destination via `--private`, read-included in recall composition, and
+// exact-path only (a `private/` nested elsewhere is just a name).
+
+#[test]
+fn private_flag_routes_into_the_zone_mirroring_the_layout() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    turu(tmp.path(), &repo)
+        .args(["resolve", "repo", "--private", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("repo/.whisper/private/env.md"));
+
+    turu(tmp.path(), &repo)
+        .args(["resolve", "branch", "--private", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("repo/.whisper/private/branches/main/notes.md"));
+
+    turu(tmp.path(), &repo)
+        .args(["append", "branch", "--private", "--text", "machine-secret"])
+        .assert()
+        .success();
+    assert!(
+        repo.join(".whisper/private/branches/main/notes.md")
+            .exists()
+    );
+    // A private append touches neither the committed repo-local file nor
+    // the machine-local store.
+    assert!(!repo.join(".whisper/branches/main/notes.md").exists());
+    assert!(
+        !tmp.path()
+            .join(".whisper/repos/cv/charly-vibes/whisper/branches/main/notes.md")
+            .exists()
+    );
+}
+
+#[test]
+fn private_flag_rejected_like_the_escape_hatch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    turu(tmp.path(), &repo)
+        .args(["append", "worktree", "--private", "--text", "x"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "--private applies only to the repo and branch scopes",
+        ));
+
+    turu(tmp.path(), &repo)
+        .args(["append", "global", "--private", "--text", "x"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "--private applies only to the repo and branch scopes",
+        ));
+
+    turu(tmp.path(), &repo)
+        .args(["append", "repo", "--private", "--global", "--text", "x"])
+        .assert()
+        .failure()
+        .stderr(contains("--global and --private are mutually exclusive"));
+}
+
+#[test]
+fn private_flag_requires_a_checkout() {
+    let tmp = tempfile::tempdir().unwrap();
+    // cwd is not a git repo: no repo-local root, no private zone.
+    turu(tmp.path(), tmp.path())
+        .args(["append", "repo", "--private", "--text", "x"])
+        .assert()
+        .failure()
+        .stderr(contains("--private requires a git checkout"));
+}
+
+#[test]
+fn recall_serves_the_private_zone_store_major() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    // Checkout layer: a private entry and a committed repo-local entry.
+    // Store layer: a newer machine-local-store entry. Store-major order
+    // serves every checkout entry (private + repo-local) before it.
+    turu(tmp.path(), &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "branch", "--private", "--text", "alpha private"])
+        .assert()
+        .success();
+    turu(tmp.path(), &repo)
+        .env("TURU_NOW", "2026-01-02T00:00:00Z")
+        .args(["append", "branch", "--text", "bravo committed"])
+        .assert()
+        .success();
+    turu(tmp.path(), &repo)
+        .env("TURU_NOW", "2026-01-03T00:00:00Z")
+        .args(["append", "branch", "--global", "--text", "charlie store"])
+        .assert()
+        .success();
+
+    let out = String::from_utf8(
+        turu(tmp.path(), &repo)
+            .args(["recall", "branch", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let a = out.find("alpha private").unwrap();
+    let b = out.find("bravo committed").unwrap();
+    let c = out.find("charlie store").unwrap();
+    assert!(
+        b < a && a < c,
+        "checkout entries first (recency inside), then store entries; {out}"
+    );
+}
+
+#[test]
+fn private_and_committed_layers_keep_distinct_id_spaces() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    for private in [false, true] {
+        let mut cmd = turu(tmp.path(), &repo);
+        cmd.env("TURU_NOW", "2026-01-01T00:00:00Z");
+        cmd.args(["append", "repo", "--text", "stated twice"]);
+        if private {
+            cmd.arg("--private");
+        }
+        cmd.assert().success();
+    }
+
+    // Same scope, same second, same text — but distinct id spaces (like
+    // the @local/@store split), so recall's id dedup serves both.
+    let out = String::from_utf8(
+        turu(tmp.path(), &repo)
+            .args(["recall", "repo", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(out.matches("stated twice").count(), 2);
+}
+
+#[test]
+fn private_zone_is_exact_path_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    // A `private/` directory nested deeper under .whisper/ is ordinary
+    // content: recall never searches, so it is not served. Resolution is
+    // exact-path (`.whisper/private/` only), never a name match.
+    let nested = repo.join(".whisper/branches/main/private");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(nested.join("notes.md"), "nested private line\n").unwrap();
+
+    turu(tmp.path(), &repo)
+        .args(["recall", "branch", "--json"])
+        .assert()
+        .failure(); // nothing servable in this scope — nested dir invisible
+}
+
 #[test]
 fn init_provisions_the_escape_hatch_layer() {
     let tmp = tempfile::tempdir().unwrap();
@@ -330,6 +501,10 @@ fn sync_managed_block_shows_repo_local_routing() {
     assert!(agents.contains(".whisper/env.md"));
     assert!(agents.contains("--global` escape hatch"));
     assert!(agents.contains("repos/cv/charly-vibes/whisper/env.md"));
+    // whisper-eiy: the private zone shows in the routing map.
+    assert!(agents.contains("--private` zone"));
+    assert!(agents.contains(".whisper/private/env.md"));
+    assert!(agents.contains(".whisper/private/branches/main/notes.md"));
 }
 
 #[test]

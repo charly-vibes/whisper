@@ -57,6 +57,7 @@ Precedence: repo (`.whisper/config.toml`, gitignored) > group (global `[groups.*
 - worktree → `/var/home/sasha/.whisper/repos/cv/charly-vibes/whisper/worktrees/.git/env.md`
   - append/resolve default: repo → `/var/home/sasha/para/areas/dev/gh/charly/whisper/.whisper/env.md`, branch → `/var/home/sasha/para/areas/dev/gh/charly/whisper/.whisper/branches/main/notes.md`
   - `--global` escape hatch: repo → `/var/home/sasha/.whisper/repos/cv/charly-vibes/whisper/env.md`, branch → `/var/home/sasha/.whisper/repos/cv/charly-vibes/whisper/branches/main/notes.md`
+  - `--private` zone (never pushed): repo → `/var/home/sasha/para/areas/dev/gh/charly/whisper/.whisper/private/env.md`, branch → `/var/home/sasha/para/areas/dev/gh/charly/whisper/.whisper/private/branches/main/notes.md`
 - Commands: `turu resolve <scope>` · `turu append <scope> [--global] --text ... [--topic k] [--supersedes id]` · `turu recall <scope> [--topic k] [--budget bytes]` · `turu distill <scope> --begin|--commit` · `turu bundle pack|unpack` · `turu status` · `turu doctor` · `turu feedback <kind>`
 
 <!-- TURU:END -->

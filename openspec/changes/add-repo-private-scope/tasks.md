@@ -10,8 +10,8 @@ Depends on: `add-shared-bundle` archived (its `shared-store` spec must exist in 
 
 ## 2. Private zone (TDD: red→green)
 
-- [ ] 2.1 RED/GREEN: `turu append --private` routes into `.whisper/private/` mirroring the repo-local layout (`private/env.md`, `private/branches/<slug>/notes.md`)
-- [ ] 2.2 RED/GREEN: recall includes the private zone (private + repo-local + global composition)
+- [x] 2.1 RED/GREEN: `turu append --private` routes into `.whisper/private/` mirroring the repo-local layout (`private/env.md`, `private/branches/<slug>/notes.md`) (whisper-eiy)
+- [x] 2.2 RED/GREEN: recall includes the private zone (private + repo-local + global composition) (whisper-eiy)
 - [ ] 2.3 RED/GREEN: `bundle pack` never includes anything under `.whisper/private/` (exact-path exclusion; a `private/` nested elsewhere is NOT excluded)
 - [ ] 2.4 RED/GREEN: `bundle unpack` never creates files under `.whisper/private/`
 - [ ] 2.5 RED/GREEN: `turu bundle pack` refuses any scope resolving under `.whisper/private/` — clear error, no bundle produced (unit-level guard binding future routing changes)
@@ -25,6 +25,6 @@ Depends on: `add-shared-bundle` archived (its `shared-store` spec must exist in 
 
 ## 4. Contract surfaces
 
-- [x] 4.1 `turu sync` managed-block routing table shows repo-local root + private zone destinations (whisper-6fv: checkout + `--global` destinations shown; private-zone line lands with whisper-eiy)
+- [x] 4.1 `turu sync` managed-block routing table shows repo-local root + private zone destinations (whisper-6fv + whisper-eiy: checkout, `--global`, and `--private` destinations shown)
 - [ ] 4.2 README + whisper skill pack: transport decision (A + private zone); "git history is forever — prevention only" stated verbatim; "repo-local publication assumes a pushable checkout — `--global` is the fallback for read-only checkouts (CI, no-push contributors)"
 - [ ] 4.3 `just ci` green (fmt + clippy `-D warnings` + test + build-locked)

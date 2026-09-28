@@ -1,6 +1,9 @@
 //! `whisper` — deterministic knowledge workspace management for AI agents.
 //!
 //! The mechanical half of the incitaciones whisper skill as a binary.
+//! Write-path verbs route through exactly one destination per call:
+//! default (checkout's repo-local root), `--global` (machine-local store),
+//! or `--private` (checkout's gitignored `.whisper/private/` zone).
 
 use std::cell::Cell;
 use std::io::{Read, Write};
@@ -50,6 +53,10 @@ enum Commands {
         /// repo-local .whisper/ (repo/branch scopes only).
         #[arg(long)]
         global: bool,
+        /// Write to the checkout's private zone .whisper/private/ —
+        /// readable locally, structurally never pushed (repo/branch only).
+        #[arg(long)]
+        private: bool,
     },
     /// Append text to a scope's file (extend, don't duplicate).
     Append {
@@ -73,6 +80,10 @@ enum Commands {
         /// read-only checkouts (CI, no-push contributors).
         #[arg(long)]
         global: bool,
+        /// Write to the checkout's private zone .whisper/private/ —
+        /// readable locally, structurally never pushed (repo/branch only).
+        #[arg(long)]
+        private: bool,
     },
     /// Serve a ranked, budget-bounded slice of a scope's entries.
     Recall {
@@ -267,9 +278,13 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                 Some("whisper resolve <scope> to get an exact write destination".into()),
             )
         }
-        Commands::Resolve { scope, global } => {
+        Commands::Resolve {
+            scope,
+            global,
+            private,
+        } => {
             let scope: workspace::Scope = scope.parse()?;
-            let target = append_target(scope, *global, &facts, &resolved)?;
+            let target = append_target(scope, *global, *private, &facts, &resolved)?;
             let data = serde_json::json!({
                 "scope": target.scope,
                 "path": target.path,
@@ -291,6 +306,7 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
             topic,
             supersedes,
             global,
+            private,
         } => {
             let scope: workspace::Scope = scope.parse()?;
             let text = collect_text(texts, *stdin)?;
@@ -298,7 +314,7 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                 return Err(WhisperError::new("nothing to append")
                     .with_suggestion("pass --text \"...\" or --stdin"));
             }
-            let target = append_target(scope, *global, &facts, &resolved)?;
+            let target = append_target(scope, *global, *private, &facts, &resolved)?;
             let ts = entry::parse_or_now(std::env::var("TURU_NOW").ok().as_deref())?;
             let report = workspace::append_entry(
                 &target,
@@ -654,12 +670,34 @@ fn scope_name(scope: workspace::Scope) -> &'static str {
 fn append_target(
     scope: workspace::Scope,
     global: bool,
+    private: bool,
     facts: &workspace::Facts,
     resolved: &config::Resolved,
 ) -> whisper::Result<workspace::Target> {
-    if !global {
-        return workspace::resolve(scope, facts, resolved);
+    if global && private {
+        return Err(WhisperError::new(
+            "--global and --private are mutually exclusive — one destination per write",
+        )
+        .with_suggestion(
+            "pick the machine-local store (--global) or the checkout's private zone (--private)",
+        ));
     }
+    if global {
+        return global_target(scope, facts, resolved);
+    }
+    if private {
+        return workspace::private_zone_target(scope, facts, resolved);
+    }
+    workspace::resolve(scope, facts, resolved)
+}
+
+/// The `--global` escape-hatch destination: the machine-local store for
+/// `repo`/`branch`; an error on other scopes (they have a single home).
+fn global_target(
+    scope: workspace::Scope,
+    facts: &workspace::Facts,
+    resolved: &config::Resolved,
+) -> whisper::Result<workspace::Target> {
     if !matches!(scope, workspace::Scope::Repo | workspace::Scope::Branch) {
         return Err(
             WhisperError::new("--global applies only to the repo and branch scopes")
@@ -689,20 +727,29 @@ fn append_scope_key(
     facts: &workspace::Facts,
     resolved: &config::Resolved,
 ) -> String {
-    let repo_local = match (&scope, &facts.repo_local_root) {
-        (workspace::Scope::Repo, Some(root)) => Some(root.join("env.md")),
-        (workspace::Scope::Branch, Some(root)) => Some(
-            root.join("branches")
-                .join(&facts.branch_slug)
-                .join("notes.md"),
-        ),
-        _ => None,
+    // Layer variants of the repo/branch layout, each its own id space:
+    // committed checkout (@local), private zone (@private), and the
+    // machine-local store (bare scope key).
+    let layer = |sub: &str| -> Option<std::path::PathBuf> {
+        match (&scope, &facts.repo_local_root) {
+            (workspace::Scope::Repo, Some(root)) => Some(root.join(sub).join("env.md")),
+            (workspace::Scope::Branch, Some(root)) => Some(
+                root.join(sub)
+                    .join("branches")
+                    .join(&facts.branch_slug)
+                    .join("notes.md"),
+            ),
+            _ => None,
+        }
     };
-    if repo_local.as_deref() == Some(target.path.as_path()) {
-        format!("{}@local", workspace::scope_key(scope, facts, resolved))
+    let suffix = if layer("").as_deref() == Some(target.path.as_path()) {
+        "@local"
+    } else if layer("private").as_deref() == Some(target.path.as_path()) {
+        "@private"
     } else {
-        workspace::scope_key(scope, facts, resolved)
-    }
+        ""
+    };
+    format!("{}{}", workspace::scope_key(scope, facts, resolved), suffix)
 }
 
 fn paths_for(
