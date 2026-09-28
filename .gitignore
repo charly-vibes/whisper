@@ -32,3 +32,5 @@ target
 # Release packaging artifacts (created by release workflow)
 bins/
 dist/
+# turu private zone — machine-specific knowledge, never pushed (git history is forever)
+.whisper/private/

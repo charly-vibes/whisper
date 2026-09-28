@@ -42,3 +42,8 @@ Never hand-roll those paths while the binary is present.
 - **Extend, don't duplicate.** Append to or correct existing notes.
 - **One repo, one key.** Canonical key is a pure function of the remote URL.
 - **Search first** before creating a new entry.
+- **Machine-specific knowledge goes to `--private`.** The zone is gitignored;
+  `turu doctor` verifies (effective ignore, tracked files, leak lint).
+- **git history is forever — prevention only.** No turu verb can retract
+  committed knowledge; the private zone keeps machine-specific facts out
+  of history in the first place.

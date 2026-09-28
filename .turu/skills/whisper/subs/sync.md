@@ -13,3 +13,4 @@ Regenerate the managed routing block in AGENTS.md.
 
 1. `turu sync --json` — updates `<!-- TURU:START -->` in AGENTS.md in place
 2. Agents in this repo read paths from the block instead of re-deriving them
+3. Also ensures the private-zone ignore rule (same rule as init; idempotent, never duplicates)

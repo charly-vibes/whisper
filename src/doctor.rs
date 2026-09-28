@@ -376,7 +376,7 @@ pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> Docto
             PRIVATE_TRACKED,
             "no tracked files under the private zone",
             format!(
-                "tracked under the private zone: [{}] — git history is forever: prevention only, retraction requires rewriting history",
+                "tracked under the private zone: [{}] — git history is forever — prevention only: retraction requires rewriting history",
                 list.join(", ")
             ),
             Some(
