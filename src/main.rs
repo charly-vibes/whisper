@@ -314,7 +314,12 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
             } else {
                 None
             };
-            (data, vec![], hint)
+            // Advisory incident-log lint (whisper-4xl): warn, never block.
+            let mut warnings = vec![];
+            if let Some(advisory) = entry::incident_log_density(&text) {
+                warnings.push(advisory);
+            }
+            (data, warnings, hint)
         }
         Commands::Recall {
             scope,
@@ -352,6 +357,17 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
             if *begin {
                 let ts = entry::parse_or_now(std::env::var("TURU_NOW").ok().as_deref())?;
                 let rev = distill::begin_for_scope(scope, &facts, &resolved, &ts)?;
+                // Lint the snapshot's entry texts (whisper-4xl) — never the
+                // raw file, where [id:…] markers would false-positive.
+                let mut warnings = vec![];
+                let snapshot = std::fs::read_to_string(&rev.snapshot_path).unwrap_or_default();
+                for item in entry::parse_file(&snapshot) {
+                    if let entry::Item::Entry(e) = item
+                        && let Some(advisory) = entry::incident_log_density(&e.text)
+                    {
+                        warnings.push(format!("{}: {}", &e.id[..12], advisory));
+                    }
+                }
                 (
                     serde_json::json!({
                         "phase": "begin",
@@ -362,7 +378,7 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                         "sha256": rev.sha256,
                         "recency": rev.recency,
                     }),
-                    vec![],
+                    warnings,
                     Some(format!(
                         "rewrite {} with the distilled content, then: turu distill {} --commit --revision {}",
                         rev.working_path.display(),

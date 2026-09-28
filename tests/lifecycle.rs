@@ -711,6 +711,82 @@ fn distill_begin_exposes_entry_recency() {
 }
 
 // ---------------------------------------------------------------------------
+// add-incident-log-lint (whisper-4xl)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn append_warns_on_incident_log_shaped_text() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args([
+            "append",
+            "repo",
+            "--text",
+            "fixed the 2026-09-28 outage in PR #123, commit abc1234d verified on main",
+            "--json",
+        ])
+        .assert()
+        .success() // advisory only: exit 0, write proceeds
+        .stdout(contains("\"warnings\""))
+        .stdout(contains("lessons, not logs"));
+
+    // The write itself is unchanged.
+    let path = resolve_repo_path(&home, &repo);
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("outage"));
+}
+
+#[test]
+fn append_stays_quiet_on_generalizable_rules() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args([
+            "append",
+            "repo",
+            "--text",
+            "deploy fails on tuesdays; retry after the queue drains",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(contains("\"warnings\":[]"));
+}
+
+#[test]
+fn distill_begin_lints_entry_texts_not_entry_markers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    // Well-formed entries always carry [id:…] lines — lint must read the
+    // entry TEXT, not the raw file, or every file would warn.
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "a calm rule"])
+        .assert()
+        .success();
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-02T00:00:00Z")
+        .args([
+            "append",
+            "repo",
+            "--text",
+            "hotfixed 2026-09-28 via PR #44 commit b1a2c3d4 rerun passed",
+        ])
+        .assert()
+        .success();
+
+    turu(&home, &repo)
+        .env("TURU_NOW", "2026-01-05T00:00:00Z")
+        .args(["distill", "repo", "--begin", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("lessons, not logs"));
+}
+
+// ---------------------------------------------------------------------------
 // add-distill-contract
 // ---------------------------------------------------------------------------
 

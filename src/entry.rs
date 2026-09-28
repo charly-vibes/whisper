@@ -208,6 +208,66 @@ pub fn entry_ids(items: &[Item]) -> Vec<&str> {
         .collect()
 }
 
+/// Advisory incident-log lint (whisper-4xl): count date-like, id-like, and
+/// chat-narration tokens in entry text; ≥3 per 500 chars (divisor floored
+/// at 500 so short texts still need 3 tokens) suggests the text records an
+/// incident instead of a generalizable lesson. Detection that warns can be
+/// loose — this never blocks a write. Returns the advisory message.
+/// Ro5-quantified lint thresholds (ticket whisper-4xl): ≥3 date/id-like
+/// tokens per 500 chars ⇒ advisory. Divisor floored at 500 so short texts
+/// still need 3 tokens. Tunable; detection that warns can be loose.
+const LINT_TOKENS: f64 = 3.0;
+const LINT_WINDOW: usize = 500;
+const LINT_ID_MAX: usize = 64;
+
+pub fn incident_log_density(text: &str) -> Option<String> {
+    let tokens = text
+        .split_whitespace()
+        .filter(|t| is_date_like(t) || is_id_like(t) || is_issue_ref(t))
+        .count();
+    let units = (text.len() / LINT_WINDOW).max(1) as f64;
+    if tokens as f64 / units < LINT_TOKENS {
+        return None;
+    }
+    Some(format!(
+        "this entry reads like an incident log ({tokens} date/id-like tokens in {} chars) — lessons, not logs: state the generalizable rule, keep one clause of why",
+        text.len()
+    ))
+}
+
+/// ISO-ish dates and timestamps: `2026-09-28`, `2026-09-28T10:00:00Z`,
+/// `09/28/2026`. Bare times (`10:00`) stay quiet — 2–4 digits is not a date.
+fn is_date_like(tok: &str) -> bool {
+    let t = tok.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+    let digits = t.chars().filter(|c| c.is_ascii_digit()).count();
+    let seps = t
+        .chars()
+        .filter(|c| *c == '-' || *c == '/' || *c == ':')
+        .count();
+    let has_year = t.len() >= 4 && t.chars().take(4).all(|c| c.is_ascii_digit());
+    digits >= 6 && seps >= 1 && t.len() <= 20 && (seps >= 2 || has_year)
+}
+
+/// Hex-ish id: ≥8 hex chars INCLUDING at least one digit (so normal hex
+/// words like `deadbeef`/`cafe` don't trip it), bounded length.
+fn is_id_like(tok: &str) -> bool {
+    let t = tok.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+    t.len() >= 8
+        && t.len() <= LINT_ID_MAX
+        && t.chars().all(|c| c.is_ascii_hexdigit())
+        && t.chars().any(|c| c.is_ascii_digit())
+}
+
+/// `#123` (trailing punctuation tolerated) — `PR #123` via token split.
+/// Leading `#` must survive trimming, so only trailing punctuation goes.
+fn is_issue_ref(tok: &str) -> bool {
+    let t = tok.trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
+    match t.strip_prefix('#') {
+        Some(body) => !body.is_empty() && body.chars().all(|c| c.is_ascii_digit()),
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,5 +376,59 @@ mod tests {
             }
             _ => panic!("expected entry"),
         }
+    }
+
+    #[test]
+    fn incident_log_lint_flags_dense_date_id_text() {
+        // Three tokens in a short text → over the 3-per-500 floor.
+        let log = "fixed 2026-09-28 in PR #123 commit abc1234d verified";
+        assert!(incident_log_density(log).is_some());
+    }
+
+    #[test]
+    fn incident_log_lint_passes_generalizable_rules() {
+        // One date in a short rule → quiet.
+        assert!(
+            incident_log_density(
+                "deploy fails on tuesdays; retry after the queue drains (seen 2026-09-28)"
+            )
+            .is_none()
+        );
+        // A long rule with two dates spread over >500 chars stays quiet.
+        let long_rule = format!(
+            "Always regenerate Cargo.lock after a version bump before building with --locked; \
+             the locked build fails otherwise. This bit the release pipeline twice. {} \
+             Padding to push the token density under the threshold: the heuristic counts \
+             date-like and id-like tokens per 500 characters of entry text, so a genuinely \
+             long generalizable rule with a couple of incidental dates must never trip it. \
+             Written 2026-09-28 after the v0.6.0 release cycle.",
+            "x".repeat(300)
+        );
+        assert!(incident_log_density(&long_rule).is_none());
+    }
+
+    #[test]
+    fn incident_log_lint_counts_dates_issue_refs_and_shas() {
+        // ISO timestamp + issue ref + sha: three different token shapes.
+        let mixed = "2026-01-01T10:00:00Z #456 broke main, hotfix b1a2c3d4 deployed";
+        assert!(incident_log_density(mixed).is_some());
+    }
+
+    #[test]
+    fn incident_log_lint_ignores_hex_words_without_digits() {
+        // "deadbeef" and "cafe" are hex words but carry no digit — not ids.
+        assert!(
+            incident_log_density(
+                "the deadbeef cafe served beef on a tuesday and the queue drained facedead"
+            )
+            .is_none()
+        );
+        // ...but abc1234d (digits) counts; three digit-bearing ids trip it.
+        assert!(
+            incident_log_density(
+                "reverted abc1234d then rebased deadbeef onto d1e2f3a4b5c6d7e picking 9f8e7d6c"
+            )
+            .is_some()
+        );
     }
 }
