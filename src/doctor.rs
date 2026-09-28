@@ -9,7 +9,10 @@ use genesis::doctor::{CheckEntry, DoctorReport};
 
 use crate::config::Resolved;
 use crate::skill_pack;
-use crate::workspace::{Facts, Scope, agents_file, legacy_variants, resolve, turu_injector};
+use crate::workspace::{
+    Facts, Scope, agents_file, legacy_variants, resolve, scope_files_for, scope_files_for_scoped,
+    turu_injector,
+};
 
 const REPO_SLOT: &str = "turu.repo-slot";
 const RULES: &str = "turu.rules-md";
@@ -200,12 +203,8 @@ pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> Docto
     // Unmanaged (freeform) lines in knowledge files: informational —
     // they carry no entry ids, so recall/bundle treat them as opaque text.
     let mut unmanaged: Vec<String> = Vec::new();
-    for scope in [Scope::Global, Scope::Repo, Scope::Branch, Scope::Worktree] {
-        let raw = resolve(scope, facts, resolved)
-            .ok()
-            .filter(|t| t.path.exists())
-            .and_then(|t| std::fs::read_to_string(&t.path).ok());
-        if let Some(raw) = raw {
+    for path in scope_files_for(facts, resolved) {
+        if let Ok(raw) = std::fs::read_to_string(&path) {
             let unranked = crate::entry::parse_file(&raw)
                 .into_iter()
                 .filter_map(|i| match i {
@@ -214,10 +213,7 @@ pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> Docto
                 })
                 .count();
             if unranked > 0 {
-                unmanaged.push(format!(
-                    "{} ({unranked} freeform line(s))",
-                    resolve(scope, facts, resolved).unwrap().path.display()
-                ));
+                unmanaged.push(format!("{} ({unranked} freeform line(s))", path.display()));
             }
         }
     }
@@ -240,11 +236,8 @@ pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> Docto
 
     // Pending distill revisions: begun but not committed (informational).
     let mut pending: Vec<String> = Vec::new();
-    for scope in [Scope::Global, Scope::Repo, Scope::Branch, Scope::Worktree] {
-        let parent = resolve(scope, facts, resolved)
-            .ok()
-            .and_then(|t| t.path.parent().map(std::path::Path::to_path_buf));
-        if let Some(parent) = parent {
+    for path in scope_files_for(facts, resolved) {
+        if let Some(parent) = path.parent().map(std::path::Path::to_path_buf) {
             for id in crate::distill::pending_revisions(&parent) {
                 pending.push(format!("{} (in {})", id, parent.display()));
             }
@@ -274,16 +267,15 @@ pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> Docto
     let now = crate::entry::parse_or_now(std::env::var("TURU_NOW").ok().as_deref()).ok();
     let mut stale: Vec<String> = Vec::new();
     let mut never_used: Vec<String> = Vec::new();
-    for scope in [Scope::Global, Scope::Repo, Scope::Branch, Scope::Worktree] {
-        let target = resolve(scope, facts, resolved)
-            .ok()
-            .filter(|t| t.path.exists());
-        let Some(target) = target else { continue };
-        let raw = match std::fs::read_to_string(&target.path) {
+    for (scope, path) in scope_files_for_scoped(facts, resolved) {
+        if !path.exists() {
+            continue;
+        }
+        let raw = match std::fs::read_to_string(&path) {
             Ok(raw) => raw,
             Err(_) => continue,
         };
-        let stats = crate::usage::read_stats(&target.path);
+        let stats = crate::usage::read_stats(&path);
         for item in crate::entry::parse_file(&raw) {
             let crate::entry::Item::Entry(e) = item else {
                 continue;

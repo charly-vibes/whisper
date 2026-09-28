@@ -90,7 +90,7 @@ fn no_remote_falls_back_to_local_key() {
 }
 
 #[test]
-fn resolve_branch_lands_under_workspace_root() {
+fn resolve_branch_lands_in_the_checkout() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
     git_repo(&repo, "git@cv:charly-vibes/whisper.git");
@@ -99,9 +99,237 @@ fn resolve_branch_lands_under_workspace_root() {
         .args(["resolve", "branch", "--json"])
         .assert()
         .success()
+        .stdout(contains("repo/.whisper/branches/main/notes.md"));
+}
+
+// whisper-6fv — decision A of add-repo-private-scope: repo/branch knowledge
+// lives in the checkout's own .whisper/ (travels with git); the machine-local
+// store stays servable via recall composition and reachable via --global.
+
+#[test]
+fn repo_local_layout_matches_the_spec() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    turu(tmp.path(), &repo)
+        .args(["resolve", "repo", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("repo/.whisper/env.md"));
+
+    turu(tmp.path(), &repo)
+        .args(["resolve", "branch", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("repo/.whisper/branches/main/notes.md"));
+}
+
+#[test]
+fn unchanged_scopes_keep_their_store_destinations() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    turu(tmp.path(), &repo)
+        .args(["resolve", "global", "--json"])
+        .assert()
+        .success()
+        .stdout(contains(".whisper/rules.md"));
+
+    turu(tmp.path(), &repo)
+        .args(["resolve", "worktree", "--json"])
+        .assert()
+        .success()
+        .stdout(contains(
+            ".whisper/repos/cv/charly-vibes/whisper/worktrees/.git/env.md",
+        ));
+}
+
+#[test]
+fn resolve_append_global_escape_hatch_writes_the_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    turu(tmp.path(), &repo)
+        .args(["resolve", "branch", "--global", "--json"])
+        .assert()
+        .success()
         .stdout(contains(
             ".whisper/repos/cv/charly-vibes/whisper/branches/main/notes.md",
         ));
+
+    turu(tmp.path(), &repo)
+        .args(["append", "repo", "--global", "--text", "stored fact"])
+        .assert()
+        .success();
+    assert!(
+        tmp.path()
+            .join(".whisper/repos/cv/charly-vibes/whisper/env.md")
+            .exists()
+    );
+    // The default destination stays untouched by a --global append.
+    assert!(!repo.join(".whisper/env.md").exists());
+}
+
+#[test]
+fn global_flag_rejected_outside_repo_and_branch_scopes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    turu(tmp.path(), &repo)
+        .args(["append", "worktree", "--global", "--text", "x"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "--global applies only to the repo and branch scopes",
+        ));
+
+    turu(tmp.path(), &repo)
+        .args(["append", "global", "--global", "--text", "x"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "--global applies only to the repo and branch scopes",
+        ));
+}
+
+#[test]
+fn recall_composes_store_major_with_dedup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    // Repo-local entries (older) written in the checkout, then a NEWER
+    // machine-local-store entry (the --global escape hatch). Store-major
+    // composition serves every checkout entry before the newer store one.
+    turu(tmp.path(), &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--text", "carol alpha"])
+        .assert()
+        .success();
+    turu(tmp.path(), &repo)
+        .env("TURU_NOW", "2026-01-02T00:00:00Z")
+        .args(["append", "repo", "--text", "bravo alpha"])
+        .assert()
+        .success();
+    turu(tmp.path(), &repo)
+        .env("TURU_NOW", "2026-01-03T00:00:00Z")
+        .args(["append", "repo", "--global", "--text", "alpha store"])
+        .assert()
+        .success();
+
+    let out = String::from_utf8(
+        turu(tmp.path(), &repo)
+            .args(["recall", "repo", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let a = out.find("carol alpha").unwrap();
+    let b = out.find("bravo alpha").unwrap();
+    let c = out.find("alpha store").unwrap();
+    assert!(
+        b < a && a < c,
+        "store-major: checkout entries first (recency inside), then store entries; {out}"
+    );
+    // No id dedup false-positive: each entry appears exactly once.
+    assert_eq!(out.matches("alpha").count(), 3);
+}
+
+#[test]
+fn recall_serves_pre_existing_store_knowledge() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    // Knowledge written the pre-decision-A way, straight into the machine-
+    // local store, must remain servable in the checkout (spec scenario).
+    turu(tmp.path(), &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "repo", "--global", "--text", "legacy store fact"])
+        .assert()
+        .success();
+
+    turu(tmp.path(), &repo)
+        .args(["recall", "repo", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("legacy store fact"));
+}
+
+#[test]
+fn same_text_in_both_layers_stays_two_distinct_entries() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    for global in [false, true] {
+        let mut cmd = turu(tmp.path(), &repo);
+        cmd.env("TURU_NOW", "2026-01-01T00:00:00Z");
+        cmd.args(["append", "repo", "--text", "stated twice"]);
+        if global {
+            cmd.arg("--global");
+        }
+        cmd.assert().success();
+    }
+
+    // Same scope, same second, same text — but different id spaces, so both
+    // entries exist and recall (which dedups by id) serves them both.
+    let out = String::from_utf8(
+        turu(tmp.path(), &repo)
+            .args(["recall", "repo", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(out.matches("stated twice").count(), 2);
+}
+
+#[test]
+fn init_provisions_the_escape_hatch_layer() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    turu(tmp.path(), &repo)
+        .args(["init", "--json"])
+        .assert()
+        .success();
+
+    // Checkout layer ...
+    assert!(repo.join(".whisper/env.md").exists());
+    assert!(repo.join(".whisper/branches/main/notes.md").exists());
+    // ... and the machine-local store layer (recall fallback + --global).
+    assert!(
+        tmp.path()
+            .join(".whisper/repos/cv/charly-vibes/whisper/env.md")
+            .exists()
+    );
+    assert!(
+        tmp.path()
+            .join(".whisper/repos/cv/charly-vibes/whisper/branches/main/notes.md")
+            .exists()
+    );
+}
+
+#[test]
+fn sync_managed_block_shows_repo_local_routing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    turu(tmp.path(), &repo).args(["sync"]).assert().success();
+
+    let agents = std::fs::read_to_string(repo.join("AGENTS.md")).unwrap();
+    assert!(agents.contains("repo → `"));
+    assert!(agents.contains(".whisper/env.md"));
+    assert!(agents.contains("--global` escape hatch"));
+    assert!(agents.contains("repos/cv/charly-vibes/whisper/env.md"));
 }
 
 #[test]
@@ -120,9 +348,7 @@ fn append_creates_then_extends_verbatim() {
         .assert()
         .success();
 
-    let env_md = tmp
-        .path()
-        .join(".whisper/repos/cv/charly-vibes/whisper/env.md");
+    let env_md = repo.join(".whisper/env.md");
     let content = std::fs::read_to_string(&env_md).unwrap();
     let lines: Vec<&str> = content.lines().collect();
     assert_eq!(lines.len(), 2);
@@ -237,11 +463,21 @@ fn repo_private_root_override_wins() {
     )
     .unwrap();
 
+    // The override relocates the machine-local store: the global scope's
+    // rules.md (and the repo/branch --global destinations) move there.
+    turu(tmp.path(), &repo)
+        .args(["resolve", "global", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("private-ws/rules.md"));
+
+    // The checkout's repo-local root is unaffected by the override —
+    // decision A routes repo/branch knowledge into the checkout itself.
     turu(tmp.path(), &repo)
         .args(["resolve", "repo", "--json"])
         .assert()
         .success()
-        .stdout(contains("private-ws/repos/cv/charly-vibes/whisper/env.md"));
+        .stdout(contains("repo/.whisper/env.md"));
 }
 
 #[test]

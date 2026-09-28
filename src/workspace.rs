@@ -15,6 +15,10 @@ use crate::{Result, WhisperError};
 
 pub const BLOCK_NAME: &str = "turu";
 
+/// Directory name of the repo-local knowledge root inside a checkout
+/// (decision A of the transport fork, add-repo-private-scope).
+pub const REPO_LOCAL_DIR: &str = ".whisper";
+
 /// Deterministic facts about the current checkout.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Facts {
@@ -24,6 +28,11 @@ pub struct Facts {
     pub branch_slug: String,
     /// Worktree slot: basename of the `.git` common dir, or of cwd.
     pub worktree_slot: String,
+    /// Repo-local knowledge root: `<repo-root>/.whisper` when the facts were
+    /// collected inside a git repo, `None` outside one. `repo`/`branch`
+    /// scopes resolve here so knowledge travels with the repo's own git
+    /// (decision A, add-repo-private-scope).
+    pub repo_local_root: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +155,24 @@ pub fn turu_injector() -> BlockInjector {
 pub fn managed_block_content(facts: &Facts, resolved: &Resolved) -> Result<String> {
     let path_of = |scope| resolve(scope, facts, resolved).map(|t| t.path);
     let fmt = |p: Result<PathBuf>| p.map(|p| format!("`{}`", p.display()));
+    // Machine-local store destinations for the checkout-owned scopes (the
+    // --global escape hatch; recall composes them as the fallback layer).
+    let store_of = |scope| {
+        let mut f = facts.clone();
+        f.repo_local_root = None;
+        resolve(scope, &f, resolved).map(|t| t.path)
+    };
+    let store_layer = if facts.repo_local_root.is_some() {
+        format!(
+            "  - append/resolve default: repo → {}, branch → {}\n  - `--global` escape hatch: repo → {}, branch → {}\n",
+            fmt(path_of(Scope::Repo)).unwrap_or_else(|_| "(unavailable)".into()),
+            fmt(path_of(Scope::Branch)).unwrap_or_else(|_| "(unavailable)".into()),
+            fmt(store_of(Scope::Repo)).unwrap_or_else(|_| "(unavailable)".into()),
+            fmt(store_of(Scope::Branch)).unwrap_or_else(|_| "(unavailable)".into()),
+        )
+    } else {
+        String::new()
+    };
 
     Ok(format!(
         "# Whisper knowledge workspace (managed by turu — regenerate with `turu sync`)\n\
@@ -157,7 +184,8 @@ pub fn managed_block_content(facts: &Facts, resolved: &Resolved) -> Result<Strin
            - repo → {}\n\
            - branch → {}\n\
            - worktree → {}\n\
-         - Commands: `turu resolve <scope>` · `turu append <scope> --text ... [--topic k] [--supersedes id]` · `turu recall <scope> [--topic k] [--budget bytes]` · `turu distill <scope> --begin|--commit` · `turu bundle pack|unpack` · `turu status` · `turu doctor` · `turu feedback <kind>`\n",
+         {}\
+         - Commands: `turu resolve <scope>` · `turu append <scope> [--global] --text ... [--topic k] [--supersedes id]` · `turu recall <scope> [--topic k] [--budget bytes]` · `turu distill <scope> --begin|--commit` · `turu bundle pack|unpack` · `turu status` · `turu doctor` · `turu feedback <kind>`\n",
         resolved.workspace_root.display(),
         resolved
             .group
@@ -171,6 +199,7 @@ pub fn managed_block_content(facts: &Facts, resolved: &Resolved) -> Result<Strin
         fmt(path_of(Scope::Repo)).unwrap_or_else(|_| "(unavailable)".into()),
         fmt(path_of(Scope::Branch)).unwrap_or_else(|_| "(unavailable)".into()),
         fmt(path_of(Scope::Worktree)).unwrap_or_else(|_| "(unavailable)".into()),
+        store_layer,
     ))
 }
 
@@ -200,10 +229,18 @@ pub fn agents_sync(
 
 /// Collect all facts for the checkout containing `dir`.
 pub fn collect_facts(dir: &Path) -> Facts {
+    // The repo-local root exists only for a genuine working tree — outside
+    // one, repo/branch scopes fall back to the machine-local store.
+    let in_repo = git(dir, &["rev-parse", "--is-inside-work-tree"]).is_some_and(|v| v == "true");
     Facts {
         repo_key: repo_key(dir),
         branch_slug: branch_slug(dir),
         worktree_slot: worktree_slot(dir),
+        repo_local_root: if in_repo {
+            Some(repo_root(dir).join(REPO_LOCAL_DIR))
+        } else {
+            None
+        },
     }
 }
 
@@ -404,9 +441,15 @@ pub fn append_entry(
 
 /// Resolve a scope to its exact destination path.
 ///
-/// `global` writes to the top-level workspace root; every other scope lands
-/// under the knowledge root (group root when a group is active, else the
-/// workspace root).
+/// `global` writes to the top-level workspace root. `worktree` and `group`
+/// stay under the knowledge root (group root when a group is active, else
+/// the workspace root) — worktree knowledge is machine-local by definition
+/// and group scope addresses the shared workspace, not the checkout.
+///
+/// `repo` and `branch` are checkout-owned (decision A): inside a git repo
+/// they resolve into the repo-local `.whisper/` so knowledge travels with
+/// the repo's own git; outside one (or via the `--global` escape hatch)
+/// they fall back to the machine-local store under the knowledge root.
 pub fn resolve(scope: Scope, facts: &Facts, resolved: &Resolved) -> Result<Target> {
     let target = match scope {
         Scope::Global => Target {
@@ -415,21 +458,30 @@ pub fn resolve(scope: Scope, facts: &Facts, resolved: &Resolved) -> Result<Targe
         },
         Scope::Repo => Target {
             scope,
-            path: resolved
-                .knowledge_root()
-                .join("repos")
-                .join(&facts.repo_key)
-                .join("env.md"),
+            path: match &facts.repo_local_root {
+                Some(root) => root.join("env.md"),
+                None => resolved
+                    .knowledge_root()
+                    .join("repos")
+                    .join(&facts.repo_key)
+                    .join("env.md"),
+            },
         },
         Scope::Branch => Target {
             scope,
-            path: resolved
-                .knowledge_root()
-                .join("repos")
-                .join(&facts.repo_key)
-                .join("branches")
-                .join(&facts.branch_slug)
-                .join("notes.md"),
+            path: match &facts.repo_local_root {
+                Some(root) => root
+                    .join("branches")
+                    .join(&facts.branch_slug)
+                    .join("notes.md"),
+                None => resolved
+                    .knowledge_root()
+                    .join("repos")
+                    .join(&facts.repo_key)
+                    .join("branches")
+                    .join(&facts.branch_slug)
+                    .join("notes.md"),
+            },
         },
         Scope::Worktree => Target {
             scope,
@@ -471,11 +523,68 @@ pub struct InitReport {
     pub existing: Vec<PathBuf>,
 }
 
+/// The scopes whose `--global` escape-hatch destinations `init` provisions.
+///
+/// `repo` and `branch` resolve into the checkout when one is present, but
+/// recall also composes the machine-local store for them — so init creates
+/// both layers when they differ (nothing to add when not in a repo or when
+/// a repo-private `workspace_root` override relocated the store).
+fn global_store_scopes(facts: &Facts) -> Vec<Scope> {
+    if facts.repo_local_root.is_some() {
+        vec![Scope::Repo, Scope::Branch]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Machine-local store destination for `repo`/`branch` scopes (the `--global`
+/// escape hatch; the default destination when there is no checkout). Panics
+/// only on programmer error — these two scopes always resolve.
+fn global_store_target(scope: Scope, facts: &Facts, resolved: &Resolved) -> Target {
+    assert!(
+        matches!(scope, Scope::Repo | Scope::Branch),
+        "global-store escape hatch is defined for repo/branch scopes only"
+    );
+    let mut f = facts.clone();
+    f.repo_local_root = None;
+    resolve(scope, &f, resolved).expect("repo/branch resolve without a checkout")
+}
+
+/// Existing scope files for doctor's per-file sweeps: every distinct scope
+/// destination, checkout layer first. Skips a checkout layer identical to
+/// the store layer (no repo-local root) and a store layer relocated onto
+/// the checkout by a repo-private `workspace_root` override.
+pub fn scope_files_for(facts: &Facts, resolved: &Resolved) -> Vec<PathBuf> {
+    scope_files_for_scoped(facts, resolved)
+        .into_iter()
+        .map(|(_, p)| p)
+        .collect()
+}
+
+/// Same as [`scope_files_for`], keeping each file's routing scope.
+pub fn scope_files_for_scoped(facts: &Facts, resolved: &Resolved) -> Vec<(Scope, PathBuf)> {
+    let mut files = Vec::new();
+    for scope in [Scope::Global, Scope::Repo, Scope::Branch, Scope::Worktree] {
+        if let Ok(t) = resolve(scope, facts, resolved) {
+            files.push((scope, t.path));
+        }
+        if matches!(scope, Scope::Repo | Scope::Branch) && facts.repo_local_root.is_some() {
+            let t = global_store_target(scope, facts, resolved);
+            if !files[1..].iter().any(|(_, p)| *p == t.path) {
+                files.push((scope, t.path));
+            }
+        }
+    }
+    files
+}
+
 /// Create the workspace layout for this checkout.
 ///
 /// Creates `rules.md`, the repo slot (`env.md`, branch slot with
-/// `context.md` / `plan.md` / `notes.md`, worktree slot with `env.md`).
-/// Never overwrites existing files.
+/// `context.md` / `plan.md` / `notes.md`, worktree slot with `env.md`),
+/// plus the machine-local store slots for `repo`/`branch` (the `--global`
+/// escape hatch and the recall-composition fallback). Never overwrites
+/// existing files.
 pub fn init(facts: &Facts, resolved: &Resolved) -> Result<InitReport> {
     let mut report = InitReport {
         workspace_root: resolved.workspace_root.clone(),
@@ -494,13 +603,28 @@ pub fn init(facts: &Facts, resolved: &Resolved) -> Result<InitReport> {
         }
     }
 
+    // Machine-local store slots for repo/branch: init provisions the layer
+    // recall composes and the --global flag writes to, without migrating
+    // anything (add-repo-private-scope decision A).
+    for scope in global_store_scopes(facts) {
+        let target = global_store_target(scope, facts, resolved);
+        if target.ensure().map_err(WhisperError::from)? {
+            report.created.push(target.path);
+        } else {
+            report.existing.push(target.path);
+        }
+    }
+
     // Branch slot also carries context.md and plan.md per the skill layout.
-    let branch_dir = resolved
-        .knowledge_root()
-        .join("repos")
-        .join(&facts.repo_key)
-        .join("branches")
-        .join(&facts.branch_slug);
+    let branch_dir = match &facts.repo_local_root {
+        Some(root) => root.join("branches").join(&facts.branch_slug),
+        None => resolved
+            .knowledge_root()
+            .join("repos")
+            .join(&facts.repo_key)
+            .join("branches")
+            .join(&facts.branch_slug),
+    };
     for name in ["context.md", "plan.md"] {
         let path = branch_dir.join(name);
         if !path.exists() {
@@ -674,11 +798,34 @@ mod tests {
     }
 
     #[test]
-    fn resolve_branch_path_shape() {
+    fn resolve_branch_in_a_checkout_is_repo_local() {
         let facts = Facts {
             repo_key: "cv/charly-vibes/whisper".into(),
             branch_slug: "feature--x".into(),
             worktree_slot: "whisper".into(),
+            repo_local_root: Some(PathBuf::from("/checkout/.whisper")),
+        };
+        let resolved = Resolved {
+            workspace_root: PathBuf::from("/tmp/ws"),
+            group: None,
+            shadowed_global_root: None,
+        };
+        let t = resolve(Scope::Branch, &facts, &resolved).unwrap();
+        assert_eq!(
+            t.path,
+            PathBuf::from("/checkout/.whisper/branches/feature--x/notes.md")
+        );
+        let r = resolve(Scope::Repo, &facts, &resolved).unwrap();
+        assert_eq!(r.path, PathBuf::from("/checkout/.whisper/env.md"));
+    }
+
+    #[test]
+    fn resolve_repo_branch_without_a_checkout_falls_back_to_store() {
+        let facts = Facts {
+            repo_key: "cv/charly-vibes/whisper".into(),
+            branch_slug: "feature--x".into(),
+            worktree_slot: "whisper".into(),
+            repo_local_root: None,
         };
         let resolved = Resolved {
             workspace_root: PathBuf::from("/tmp/ws"),
@@ -690,6 +837,11 @@ mod tests {
             t.path,
             PathBuf::from("/tmp/ws/repos/cv/charly-vibes/whisper/branches/feature--x/notes.md")
         );
+        let r = resolve(Scope::Repo, &facts, &resolved).unwrap();
+        assert_eq!(
+            r.path,
+            PathBuf::from("/tmp/ws/repos/cv/charly-vibes/whisper/env.md")
+        );
     }
 
     #[test]
@@ -698,6 +850,7 @@ mod tests {
             repo_key: "github.com/u/r".into(),
             branch_slug: "main".into(),
             worktree_slot: "r".into(),
+            repo_local_root: None,
         };
         let resolved = Resolved {
             workspace_root: PathBuf::from("/tmp/ws"),
@@ -713,6 +866,7 @@ mod tests {
             repo_key: repo_key.into(),
             branch_slug: "main".into(),
             worktree_slot: "ws".into(),
+            repo_local_root: None,
         }
     }
 
@@ -848,10 +1002,12 @@ mod tests {
     #[test]
     fn append_creates_then_extends() {
         let tmp = tempfile::tempdir().unwrap();
+        let checkout = tempfile::tempdir().unwrap();
         let facts = Facts {
             repo_key: "github.com/u/r".into(),
             branch_slug: "main".into(),
             worktree_slot: "r".into(),
+            repo_local_root: Some(checkout.path().join(".whisper")),
         };
         let resolved = Resolved {
             workspace_root: tmp.path().to_path_buf(),
@@ -859,11 +1015,65 @@ mod tests {
             shadowed_global_root: None,
         };
         let t = resolve(Scope::Repo, &facts, &resolved).unwrap();
+        // Decision A: repo knowledge lands in the checkout, not the store.
+        assert_eq!(t.path, checkout.path().join(".whisper/env.md"));
         assert!(t.ensure().unwrap());
         t.append("first fact").unwrap();
         t.append("second fact\n\n").unwrap();
         let content = std::fs::read_to_string(&t.path).unwrap();
         assert_eq!(content, "first fact\nsecond fact\n");
         assert!(!t.ensure().unwrap());
+    }
+
+    #[test]
+    fn init_provisions_both_layers_when_in_a_checkout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let checkout = tempfile::tempdir().unwrap();
+        let facts = Facts {
+            repo_key: "github.com/u/r".into(),
+            branch_slug: "main".into(),
+            worktree_slot: "r".into(),
+            repo_local_root: Some(checkout.path().join(".whisper")),
+        };
+        let resolved = Resolved {
+            workspace_root: tmp.path().to_path_buf(),
+            group: None,
+            shadowed_global_root: None,
+        };
+
+        init(&facts, &resolved).unwrap();
+
+        // Repo-local layer (committed) ...
+        assert!(checkout.path().join(".whisper/env.md").exists());
+        assert!(
+            checkout
+                .path()
+                .join(".whisper/branches/main/notes.md")
+                .exists()
+        );
+        // ... and the machine-local store layer (escape hatch + recall
+        // composition fallback), provisioned side by side.
+        assert!(tmp.path().join("repos/github.com/u/r/env.md").exists());
+        assert!(
+            tmp.path()
+                .join("repos/github.com/u/r/branches/main/notes.md")
+                .exists()
+        );
+        // Outside a checkout only the store layer exists — the scope files
+        // are already there (no re-creation); only the branch-slot extras
+        // (context.md/plan.md) are new, since the first init's branch slot
+        // lived in the checkout layer.
+        let bare = Facts {
+            repo_local_root: None,
+            ..facts
+        };
+        let report = init(&bare, &resolved).unwrap();
+        for p in &report.created {
+            let name = p.file_name().unwrap().to_string_lossy();
+            assert!(
+                name == "context.md" || name == "plan.md",
+                "unexpected creation: {p:?}"
+            );
+        }
     }
 }

@@ -52,10 +52,12 @@ Precedence: repo (`.whisper/config.toml`, gitignored) > group (global `[groups.*
 - Repo key: `cv/charly-vibes/whisper` · Branch slug: `main` · Worktree slot: `.git`
 - Deterministic routing (resolve, never guess):
 - global → `/var/home/sasha/.whisper/rules.md`
-- repo → `/var/home/sasha/.whisper/repos/cv/charly-vibes/whisper/env.md`
-- branch → `/var/home/sasha/.whisper/repos/cv/charly-vibes/whisper/branches/main/notes.md`
+- repo → `/var/home/sasha/para/areas/dev/gh/charly/whisper/.whisper/env.md`
+- branch → `/var/home/sasha/para/areas/dev/gh/charly/whisper/.whisper/branches/main/notes.md`
 - worktree → `/var/home/sasha/.whisper/repos/cv/charly-vibes/whisper/worktrees/.git/env.md`
-- Commands: `turu resolve <scope>` · `turu append <scope> --text ... [--topic k] [--supersedes id]` · `turu recall <scope> [--topic k] [--budget bytes]` · `turu distill <scope> --begin|--commit` · `turu bundle pack|unpack` · `turu status` · `turu doctor` · `turu feedback <kind>`
+  - append/resolve default: repo → `/var/home/sasha/para/areas/dev/gh/charly/whisper/.whisper/env.md`, branch → `/var/home/sasha/para/areas/dev/gh/charly/whisper/.whisper/branches/main/notes.md`
+  - `--global` escape hatch: repo → `/var/home/sasha/.whisper/repos/cv/charly-vibes/whisper/env.md`, branch → `/var/home/sasha/.whisper/repos/cv/charly-vibes/whisper/branches/main/notes.md`
+- Commands: `turu resolve <scope>` · `turu append <scope> [--global] --text ... [--topic k] [--supersedes id]` · `turu recall <scope> [--topic k] [--budget bytes]` · `turu distill <scope> --begin|--commit` · `turu bundle pack|unpack` · `turu status` · `turu doctor` · `turu feedback <kind>`
 
 <!-- TURU:END -->
 

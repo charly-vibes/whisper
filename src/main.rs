@@ -46,6 +46,10 @@ enum Commands {
         /// Scope: global | repo | branch | worktree | group
         #[arg()]
         scope: String,
+        /// Write to the machine-local store instead of the checkout's
+        /// repo-local .whisper/ (repo/branch scopes only).
+        #[arg(long)]
+        global: bool,
     },
     /// Append text to a scope's file (extend, don't duplicate).
     Append {
@@ -64,6 +68,11 @@ enum Commands {
         /// Mark the entry with this id as superseded by the new entry.
         #[arg(long = "supersedes")]
         supersedes: Option<String>,
+        /// Write to the machine-local store instead of the checkout's
+        /// repo-local .whisper/ (repo/branch scopes only) — escape hatch for
+        /// read-only checkouts (CI, no-push contributors).
+        #[arg(long)]
+        global: bool,
     },
     /// Serve a ranked, budget-bounded slice of a scope's entries.
     Recall {
@@ -258,9 +267,9 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                 Some("whisper resolve <scope> to get an exact write destination".into()),
             )
         }
-        Commands::Resolve { scope } => {
+        Commands::Resolve { scope, global } => {
             let scope: workspace::Scope = scope.parse()?;
-            let target = workspace::resolve(scope, &facts, &resolved)?;
+            let target = append_target(scope, *global, &facts, &resolved)?;
             let data = serde_json::json!({
                 "scope": target.scope,
                 "path": target.path,
@@ -281,6 +290,7 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
             stdin,
             topic,
             supersedes,
+            global,
         } => {
             let scope: workspace::Scope = scope.parse()?;
             let text = collect_text(texts, *stdin)?;
@@ -288,11 +298,11 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                 return Err(WhisperError::new("nothing to append")
                     .with_suggestion("pass --text \"...\" or --stdin"));
             }
-            let target = workspace::resolve(scope, &facts, &resolved)?;
+            let target = append_target(scope, *global, &facts, &resolved)?;
             let ts = entry::parse_or_now(std::env::var("TURU_NOW").ok().as_deref())?;
             let report = workspace::append_entry(
                 &target,
-                &workspace::scope_key(scope, &facts, &resolved),
+                &append_scope_key(scope, &target, &facts, &resolved),
                 &text,
                 topic.as_deref(),
                 supersedes.as_deref(),
@@ -634,6 +644,64 @@ fn scope_name(scope: workspace::Scope) -> &'static str {
         workspace::Scope::Branch => "branch",
         workspace::Scope::Worktree => "worktree",
         workspace::Scope::Group => "group",
+    }
+}
+
+/// Destination for write-path verbs (resolve/append): the checkout's
+/// repo-local root for `repo`/`branch` (decision A — knowledge travels with
+/// the repo's git), unless `--global` selects the machine-local store.
+/// `--global` on other scopes is an error (they have a single home).
+fn append_target(
+    scope: workspace::Scope,
+    global: bool,
+    facts: &workspace::Facts,
+    resolved: &config::Resolved,
+) -> whisper::Result<workspace::Target> {
+    if !global {
+        return workspace::resolve(scope, facts, resolved);
+    }
+    if !matches!(scope, workspace::Scope::Repo | workspace::Scope::Branch) {
+        return Err(
+            WhisperError::new("--global applies only to the repo and branch scopes")
+                .with_suggestion(format!(
+                    "{} always writes to its single home — drop --global",
+                    scope_name(scope)
+                )),
+        );
+    }
+    if facts.repo_local_root.is_none() {
+        return Err(WhisperError::new(
+            "--global is redundant outside a git repo — repo/branch already resolve to the store",
+        )
+        .with_suggestion("drop --global"));
+    }
+    let mut checkout = facts.clone();
+    checkout.repo_local_root = None;
+    workspace::resolve(scope, &checkout, resolved)
+}
+
+/// Scope key for an appended entry, matching where it landed: append
+/// derives it from the resolved target so store and checkout never share
+/// an id space (decision A — same text in both layers stays distinct).
+fn append_scope_key(
+    scope: workspace::Scope,
+    target: &workspace::Target,
+    facts: &workspace::Facts,
+    resolved: &config::Resolved,
+) -> String {
+    let repo_local = match (&scope, &facts.repo_local_root) {
+        (workspace::Scope::Repo, Some(root)) => Some(root.join("env.md")),
+        (workspace::Scope::Branch, Some(root)) => Some(
+            root.join("branches")
+                .join(&facts.branch_slug)
+                .join("notes.md"),
+        ),
+        _ => None,
+    };
+    if repo_local.as_deref() == Some(target.path.as_path()) {
+        format!("{}@local", workspace::scope_key(scope, facts, resolved))
+    } else {
+        workspace::scope_key(scope, facts, resolved)
     }
 }
 

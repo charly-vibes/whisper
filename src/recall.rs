@@ -44,16 +44,76 @@ pub struct ServedLine {
     pub line: String,
 }
 
-fn scope_order(recall: &RecallScope, resolved: &Resolved) -> Vec<Scope> {
-    match recall {
-        RecallScope::One(s) => vec![*s],
-        RecallScope::All => {
-            let mut scopes = vec![Scope::Global];
-            if resolved.group.is_some() {
-                scopes.push(Scope::Group);
+/// One store that participates in recall composition.
+struct Store {
+    /// Scope tag for served items.
+    scope: Scope,
+    /// The exact scope file (None: store does not apply — skip silently).
+    path: Option<std::path::PathBuf>,
+    // Positional note: stores arrive in store-major order — every checkout
+    // (repo-local) store is listed before its machine-local store, so no
+    // flag is needed here; the order itself is the contract.
+}
+
+/// The stores composing this recall, in store-major serving order. One-scope
+/// recall surfaces resolve errors (e.g. `group` with no active group — same
+/// contract as bundle pack); `all` skips scopes that cannot resolve (e.g. no
+/// group) and keeps composing.
+fn stores_for(recall: &RecallScope, facts: &Facts, resolved: &Resolved) -> Result<Vec<Store>> {
+    // Machine-local store destination for a scope (the pre-decision-A home
+    // and the --global escape hatch target).
+    let store_path = |scope: Scope| -> Result<std::path::PathBuf> {
+        let mut f = facts.clone();
+        f.repo_local_root = None;
+        Ok(workspace::resolve(scope, &f, resolved)?.path)
+    };
+    let one = |scope: Scope| -> Result<Vec<Store>> {
+        match scope {
+            Scope::Repo | Scope::Branch => {
+                let checkout = facts.repo_local_root.as_ref().map(|root| match scope {
+                    Scope::Repo => root.join("env.md"),
+                    Scope::Branch => root
+                        .join("branches")
+                        .join(&facts.branch_slug)
+                        .join("notes.md"),
+                    _ => unreachable!(),
+                });
+                let mut stores = Vec::new();
+                if let Some(path) = checkout {
+                    stores.push(Store {
+                        scope,
+                        path: Some(path),
+                    });
+                }
+                stores.push(Store {
+                    scope,
+                    path: Some(store_path(scope)?),
+                });
+                Ok(stores)
             }
-            scopes.extend([Scope::Repo, Scope::Branch, Scope::Worktree]);
-            scopes
+            _ => Ok(vec![Store {
+                scope,
+                path: Some(store_path(scope)?),
+            }]),
+        }
+    };
+    match recall {
+        RecallScope::One(s) => one(*s),
+        RecallScope::All => {
+            let mut stores = vec![Store {
+                scope: Scope::Global,
+                path: store_path(Scope::Global).ok(),
+            }];
+            if resolved.group.is_some() {
+                stores.push(Store {
+                    scope: Scope::Group,
+                    path: store_path(Scope::Group).ok(),
+                });
+            }
+            for scope in [Scope::Repo, Scope::Branch, Scope::Worktree] {
+                stores.extend(one(scope)?);
+            }
+            Ok(stores)
         }
     }
 }
@@ -76,6 +136,7 @@ pub fn recall(
     let mut served_bytes = 0usize;
     let mut entries_skipped = 0usize;
     let mut freeform_skipped = 0usize;
+    let mut served_ids = std::collections::HashSet::new();
     // Entry ids served per scope file, recorded to the usage sidecar after
     // serving (skip-on-error: recall must never fail because telemetry
     // cannot write — read-only workspaces still recall).
@@ -84,23 +145,22 @@ pub fn recall(
         std::collections::HashMap::new();
     let now = entry::parse_or_now(std::env::var("TURU_NOW").ok().as_deref())?;
 
-    for scope in scope_order(recall_scope, resolved) {
-        // One-scope recall surfaces resolve errors (e.g. `group` with no
-        // active group — same contract as bundle pack); `all` skips scopes
-        // that cannot resolve (e.g. no group) and keeps composing.
-        let target = match recall_scope {
-            RecallScope::One(_) => workspace::resolve(scope, facts, resolved)?,
-            RecallScope::All => match workspace::resolve(scope, facts, resolved) {
-                Ok(t) => t,
-                Err(_) => continue,
-            },
+    // Stores arrive in store-major order; within a store the scope file is
+    // read and ranked newest-first (stable — ties keep file order), then the
+    // whole-entry byte budget applies. When a scope spans two stores, the
+    // checkout's repo-local entries all serve before any workspace-root
+    // entry — even a newer one — and ids are deduplicated across stores so
+    // a bundled or migrated entry is never served twice.
+    for store in stores_for(recall_scope, facts, resolved)? {
+        let Some(path) = store.path else {
+            continue;
         };
-        let raw = match std::fs::read_to_string(&target.path) {
+        let raw = match std::fs::read_to_string(&path) {
             Ok(raw) => raw,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => return Err(WhisperError::from(e)),
         };
-        let scope_name = scope_name(scope);
+        let scope_name = scope_name(store.scope);
 
         // Entries: filter, then rank newest-first (stable — ties keep file
         // order), then budget with whole-entry atomicity.
@@ -120,6 +180,9 @@ pub fn recall(
         scoped.sort_by(|a, b| b.ts.cmp(&a.ts));
 
         for e in scoped {
+            if !served_ids.insert(e.id.clone()) {
+                continue; // same entry reached through another store
+            }
             let cost = e.render().len();
             match budget {
                 Some(b) if served_bytes + cost > b => entries_skipped += 1,
@@ -127,9 +190,9 @@ pub fn recall(
                     served_bytes += cost;
                     if record_usage {
                         usage_batch
-                            .entry(target.path.clone())
+                            .entry(path.clone())
                             .or_insert_with(|| {
-                                usage_order.push(target.path.clone());
+                                usage_order.push(path.clone());
                                 Vec::new()
                             })
                             .push(e.id.clone());
