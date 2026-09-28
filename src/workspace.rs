@@ -5,6 +5,8 @@
 //! private zone (`.whisper/private/`) is one of those pure resolutions:
 //! a path, not a policy — defined only for repo/branch scopes inside a
 //! checkout, and written only by explicit private-scope operations.
+//! The zone's gitignore state is likewise deterministic: `init`/`sync`
+//! repair it against `git check-ignore` truth, never by text matching.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -568,6 +570,56 @@ pub fn is_in_private_zone(path: &Path, facts: &Facts) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Checkout self-protection (add-repo-private-scope 3.1)
+// ---------------------------------------------------------------------------
+
+/// Is the private zone effectively ignored? `git check-ignore` is the
+/// truth, not text presence: a nested `.gitignore` (or the user's global
+/// excludes file) can already carry the effective rule. The probe is a
+/// synthetic file path *under* the zone — a dir-only pattern (`private/`)
+/// does not match the bare directory name before the directory exists,
+/// but it must match every file the zone will ever contain.
+fn private_zone_effectively_ignored(checkout: &Path, rel: &str) -> bool {
+    let probe = format!("{rel}/probe");
+    let out = Command::new("git")
+        .args(["check-ignore", "-q", "--", &probe])
+        .current_dir(checkout)
+        .output();
+    matches!(out, Ok(o) if o.status.code() == Some(0))
+}
+
+/// Ensure the checkout's private zone is effectively ignored by git.
+///
+/// Appends `.whisper/private/` to the root `.gitignore` only when
+/// `git check-ignore` does not already report the zone as ignored — never
+/// duplicates the rule, never touches other entries. A no-op outside a
+/// checkout (no repo-local root → no zone to protect). Returns whether
+/// the rule was appended.
+pub fn ensure_private_ignored(facts: &Facts) -> Result<bool> {
+    let Some(local_root) = &facts.repo_local_root else {
+        return Ok(false);
+    };
+    let checkout = local_root
+        .parent()
+        .expect("repo-local root always has a parent (the checkout)");
+    let rel = Path::new(REPO_LOCAL_DIR).join("private");
+    let rel = rel.to_string_lossy();
+    if private_zone_effectively_ignored(checkout, &rel) {
+        return Ok(false);
+    }
+    let gitignore = checkout.join(".gitignore");
+    let mut content = std::fs::read_to_string(&gitignore).unwrap_or_default();
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(&format!(
+        "# turu private zone — machine-specific knowledge, never pushed (git history is forever)\n{rel}/\n"
+    ));
+    std::fs::write(&gitignore, content)?;
+    Ok(true)
+}
+
+// ---------------------------------------------------------------------------
 // Layout operations
 // ---------------------------------------------------------------------------
 
@@ -578,6 +630,10 @@ pub struct InitReport {
     pub group: Option<String>,
     pub created: Vec<PathBuf>,
     pub existing: Vec<PathBuf>,
+    /// Whether init appended the private-zone ignore rule to the root
+    /// `.gitignore` (false when already effectively ignored or outside a
+    /// checkout).
+    pub ignore_rule_added: bool,
 }
 
 /// The scopes whose `--global` escape-hatch destinations `init` provisions.
@@ -648,7 +704,12 @@ pub fn init(facts: &Facts, resolved: &Resolved) -> Result<InitReport> {
         group: resolved.group.as_ref().map(|(n, _)| n.clone()),
         created: Vec::new(),
         existing: Vec::new(),
+        ignore_rule_added: false,
     };
+
+    // Checkout self-protection (3.1): the private zone must be effectively
+    // ignored before any `--private` append can put knowledge there.
+    report.ignore_rule_added = ensure_private_ignored(facts)?;
 
     let scopes = [Scope::Global, Scope::Repo, Scope::Branch, Scope::Worktree];
     for scope in scopes {

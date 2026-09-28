@@ -626,6 +626,137 @@ fn sync_managed_block_shows_repo_local_routing() {
     assert!(agents.contains(".whisper/private/branches/main/notes.md"));
 }
 
+// ---------------------------------------------------------------------------
+// add-repo-private-scope 3.1 — checkout self-protection (ignore rule)
+// ---------------------------------------------------------------------------
+
+/// Assert the zone is effectively ignored via `git check-ignore` — the
+/// same truth the implementation must use (text presence is not).
+fn assert_effectively_ignored(repo: &Path, ignored: bool) {
+    let out = Command::new("git")
+        .args(["check-ignore", "-q", "--", ".whisper/private/probe"])
+        .current_dir(repo)
+        .status()
+        .expect("git available");
+    assert_eq!(
+        out.code(),
+        if ignored { Some(0) } else { Some(1) },
+        "check-ignore .whisper/private: expected ignored={ignored}"
+    );
+}
+
+#[test]
+fn init_appends_private_ignore_rule_when_absent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+    assert!(!repo.join(".gitignore").exists());
+
+    turu(tmp.path(), &repo)
+        .args(["init", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("\"ignore_rule_added\":true"));
+
+    let gitignore = std::fs::read_to_string(repo.join(".gitignore")).unwrap();
+    assert!(gitignore.contains(".whisper/private/"), "{gitignore}");
+    assert_effectively_ignored(&repo, true);
+}
+
+#[test]
+fn init_ignore_rule_is_idempotent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    turu(tmp.path(), &repo).args(["init"]).assert().success();
+    let first = std::fs::read_to_string(repo.join(".gitignore")).unwrap();
+    turu(tmp.path(), &repo)
+        .args(["init", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("\"ignore_rule_added\":false"));
+
+    let second = std::fs::read_to_string(repo.join(".gitignore")).unwrap();
+    assert_eq!(first, second, "re-init must not change .gitignore");
+    assert_eq!(
+        first.matches(".whisper/private/").count(),
+        1,
+        "exactly one rule"
+    );
+}
+
+#[test]
+fn init_preserves_existing_gitignore_entries() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+    let original = "target/\n*.log\n";
+    std::fs::write(repo.join(".gitignore"), original).unwrap();
+
+    turu(tmp.path(), &repo).args(["init"]).assert().success();
+
+    let gitignore = std::fs::read_to_string(repo.join(".gitignore")).unwrap();
+    assert!(gitignore.starts_with(original), "{gitignore}");
+    assert_eq!(gitignore.matches(".whisper/private/").count(), 1);
+    assert_effectively_ignored(&repo, true);
+}
+
+#[test]
+fn init_skips_rule_when_a_nested_gitignore_already_ignores_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+    // Effective rule lives in a nested .gitignore — the checkout is already
+    // self-protected; init must not append a redundant root rule (and must
+    // not conjure a root .gitignore out of nothing).
+    std::fs::create_dir_all(repo.join(".whisper")).unwrap();
+    std::fs::write(repo.join(".whisper/.gitignore"), "private/\n").unwrap();
+    assert_effectively_ignored(&repo, true);
+
+    turu(tmp.path(), &repo)
+        .args(["init", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("\"ignore_rule_added\":false"));
+
+    assert!(!repo.join(".gitignore").exists());
+}
+
+#[test]
+fn sync_ensures_the_private_ignore_rule_too() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+    std::fs::write(repo.join(".gitignore"), "target/\n").unwrap();
+
+    turu(tmp.path(), &repo)
+        .args(["sync", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("\"ignore_rule_added\":true"));
+
+    let gitignore = std::fs::read_to_string(repo.join(".gitignore")).unwrap();
+    assert_eq!(gitignore.matches(".whisper/private/").count(), 1);
+    assert_effectively_ignored(&repo, true);
+}
+
+#[test]
+fn ignore_rule_ensure_is_a_noop_outside_a_repo() {
+    // No checkout → no private zone → nothing to protect. `init` must not
+    // create a .gitignore in the cwd.
+    let tmp = tempfile::tempdir().unwrap();
+    let plain = tmp.path().join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+
+    turu(tmp.path(), &plain)
+        .args(["init", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("\"ignore_rule_added\":false"));
+    assert!(!plain.join(".gitignore").exists());
+}
+
 #[test]
 fn append_creates_then_extends_verbatim() {
     let tmp = tempfile::tempdir().unwrap();

@@ -4,6 +4,8 @@
 //! Write-path verbs route through exactly one destination per call:
 //! default (checkout's repo-local root), `--global` (machine-local store),
 //! or `--private` (checkout's gitignored `.whisper/private/` zone).
+//! `init` and `sync` keep that zone effectively ignored so the routing
+//! contract and git's exclusion state never drift apart.
 
 use std::cell::Cell;
 use std::io::{Read, Write};
@@ -461,6 +463,7 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                 "group": report.group,
                 "created": report.created,
                 "existing": report.existing,
+                "ignore_rule_added": report.ignore_rule_added,
             });
             (
                 data,
@@ -552,11 +555,15 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
             (data, vec![], Some(hint))
         }
         Commands::Sync { file } => {
+            // Checkout self-protection (add-repo-private-scope 3.1): sync
+            // ensures the private-zone ignore rule alongside the routing map.
+            let ignore_rule_added = workspace::ensure_private_ignored(&facts)?;
             let (target, outcome) =
                 workspace::agents_sync(&cwd, file.as_deref(), &facts, &resolved)?;
             let data = serde_json::json!({
                 "target": target,
                 "outcome": outcome,
+                "ignore_rule_added": ignore_rule_added,
             });
             (
                 data,
