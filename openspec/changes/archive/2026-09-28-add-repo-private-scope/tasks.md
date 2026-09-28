@@ -19,12 +19,12 @@ Depends on: `add-shared-bundle` archived (its `shared-store` spec must exist in 
 
 ## 3. Ignore rule + doctor (TDD: red→green)
 
-- [ ] 3.1 RED/GREEN: `turu init`/`turu sync` ensure `.gitignore` contains `.whisper/private/` — append when absent, never duplicate, never modify other entries
-- [ ] 3.2 RED/GREEN: doctor privacy checks — (a) effective ignore verified via `git check-ignore` (warning + fix hint when not ignored — text presence is not the truth), (b) no tracked files under `.whisper/private/` via `git ls-files` (prominent failure), (c) advisory leak-shape lint on public repo-local knowledge files (machine paths, hostnames, token-shaped strings) via envelope `warnings[]`
-- [ ] 3.3 Update doctor pass-count tests for the new checks (known shift, cf. t6j gotcha)
+- [x] 3.1 RED/GREEN: `turu init`/`turu sync` ensure `.gitignore` contains `.whisper/private/` — append when absent, never duplicate, never modify other entries
+- [x] 3.2 RED/GREEN: doctor privacy checks — (a) effective ignore verified via `git check-ignore` (warning + fix hint when not ignored — text presence is not the truth), (b) no tracked files under `.whisper/private/` via `git ls-files` (prominent failure), (c) advisory leak-shape lint on public repo-local knowledge files (machine paths, hostnames, token-shaped strings) via envelope `warnings[]`
+- [x] 3.3 Update doctor pass-count tests for the new checks (known shift, cf. t6j gotcha)
 
 ## 4. Contract surfaces
 
 - [x] 4.1 `turu sync` managed-block routing table shows repo-local root + private zone destinations (whisper-6fv + whisper-eiy: checkout, `--global`, and `--private` destinations shown)
-- [ ] 4.2 README + whisper skill pack: transport decision (A + private zone); "git history is forever — prevention only" stated verbatim; "repo-local publication assumes a pushable checkout — `--global` is the fallback for read-only checkouts (CI, no-push contributors)"
-- [ ] 4.3 `just ci` green (fmt + clippy `-D warnings` + test + build-locked)
+- [x] 4.2 README + whisper skill pack: transport decision (A + private zone); "git history is forever — prevention only" stated verbatim; "repo-local publication assumes a pushable checkout — `--global` is the fallback for read-only checkouts (CI, no-push contributors)"
+- [x] 4.3 `just ci` green (fmt + clippy `-D warnings` + test + build-locked)
