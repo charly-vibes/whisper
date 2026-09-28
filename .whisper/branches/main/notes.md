@@ -10,3 +10,10 @@
   - Gotcha: can't trigger pack/unpack guards with synthetic repo_local_root inside the zone (zone root = root+/private composes past it) — real trigger is a misconfigured group root inside the zone, which resolve() honors; unpack envelope does not echo entry text, assert file contents instead; clippy &PathBuf-vs-&Path in test helpers
   - Remaining: whisper-7eo (init/sync gitignore rule + doctor privacy checks + README/skill docs) — last slice of add-repo-private-scope
   - **Next:** claim whisper-7eo
+- 2026-09-28T21:48:17Z [id:5de06478347b9aaee823a4e22c9632ad3342d112f41c5105435319302516033d] ### 2026-09-28 18:48 — snap
+  - Slice 3 of add-repo-private-scope shipped: whisper-eiy (44e451f, --private routing + recall read-inclusion) and whisper-4xo (7521643, transport guards: pack refusal + private_excluded, unpack private_skipped, consolidate zone guard), both closed+pushed; just ci green, 130 tests
+  - Key gotchas: pack/unpack guards only triggerable via misconfigured group root inside the zone (repo_local_root-inside-zone composes past it); unpack envelope never echoes entry text; PATH turu is stale v0.6.0 — smoke via ./target/debug/turu
+  - **Next:** claim whisper-7eo (last slice: init/sync gitignore rule, doctor privacy checks — check-ignore + tracked-files + leak-shape lint, README/skill docs), then openspec archive add-repo-private-scope
+- 2026-09-28T21:53:23Z [id:87fe77fc598128b01224fffb7f7116cca448f6187c3b10fc7471e00f8322b903] ### 2026-09-28 18:53 — snap
+  - No new work since the 18:48 snap — session stashed again immediately; state unchanged (eiy + 4xo shipped/closed/pushed, tree clean, ci green)
+  - **Next:** claim whisper-7eo (last add-repo-private-scope slice: init/sync gitignore rule, doctor privacy checks, README/skill docs), then openspec archive add-repo-private-scope
