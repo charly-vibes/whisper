@@ -546,6 +546,10 @@ pub fn leak_warnings(facts: &Facts, resolved: &Resolved) -> Vec<String> {
         let mut linted: Vec<String> = Vec::new();
         for item in crate::entry::parse_file(&raw) {
             match item {
+                // Superseded entries are dead by decision — the staleness
+                // check exempts them and so does the leak lint: their text
+                // stays in the file but must not nag forever.
+                crate::entry::Item::Entry(e) if e.superseded_by.is_some() => {}
                 crate::entry::Item::Entry(e) => linted.extend(leak_findings(&e.text)),
                 crate::entry::Item::Line(l) => {
                     if !l.trim().is_empty() {

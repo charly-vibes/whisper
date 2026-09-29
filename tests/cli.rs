@@ -876,6 +876,52 @@ fn doctor_leak_lint_stays_quiet_on_clean_checkouts() {
 }
 
 #[test]
+fn doctor_leak_lint_skips_superseded_entries() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    turu(tmp.path(), &repo).args(["init"]).assert().success();
+    turu(tmp.path(), &repo).args(["sync"]).assert().success();
+
+    let out = turu(tmp.path(), &repo)
+        .args([
+            "append",
+            "repo",
+            "--json",
+            "--text",
+            "deploy runs from /home/sasha/infra",
+        ])
+        .output()
+        .unwrap();
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let id = envelope["data"]["id"].as_str().unwrap().to_string();
+    assert_eq!(id.len(), 64);
+
+    // Supersede it with clean text — the dead entry must stop tripping the
+    // advisory lint (superseded = dead by decision, cf. usage-staleness).
+    turu(tmp.path(), &repo)
+        .args([
+            "append",
+            "repo",
+            "--json",
+            "--supersedes",
+            &id,
+            "--text",
+            "deploy needs vault login",
+        ])
+        .assert()
+        .success();
+
+    turu(tmp.path(), &repo)
+        .args(["doctor", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("\"warn\":0"))
+        .stdout(contains("\"fail\":0"));
+}
+
+#[test]
 fn append_creates_then_extends_verbatim() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
