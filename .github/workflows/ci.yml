@@ -54,7 +54,7 @@ jobs:
         env:
           DO_NOT_TRACK: "1"
         run: |
-          bd list >/dev/null
+          bd --version >/dev/null
           ddl status >/dev/null
           pretender check >/dev/null
       # Run the exact same command as local development
