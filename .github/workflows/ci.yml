@@ -41,6 +41,22 @@ jobs:
       - name: Install just
         uses: extractions/setup-just@v3
 
+      - name: Install ecosystem tools (§4 dogfood matrix, pinned)
+        run: |
+          cargo install --locked pretender@0.6.0 wai-cli@2026.9.28 dulce-de-leche@0.7.0
+      - name: Install bd (beads, pinned §4)
+        run: |
+          curl -fsSL https://github.com/gastownhall/beads/releases/download/v1.3.0/beads_1.3.0_linux_amd64.tar.gz -o bd.tgz
+          tar -xzf bd.tgz
+          sudo mv bd /usr/local/bin/bd
+      # §4 dogfood: installed tools must run, not just install
+      - name: Smoke dogfooded tools
+        env:
+          DO_NOT_TRACK: "1"
+        run: |
+          bd list >/dev/null
+          ddl status >/dev/null
+          pretender check >/dev/null
       # Run the exact same command as local development
       - name: Run CI pipeline
         run: just ci
