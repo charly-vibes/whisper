@@ -14,6 +14,13 @@ The whisper skill asks an agent to manage `~/.whisper/` — canonical repo keys,
 
 Part of the [charly-vibes](https://github.com/charly-vibes) tool suite; built on [genesis-vibes](https://github.com/charly-vibes/genesis) for the JSON envelope, config, and CLI conventions shared across the family.
 
+> **Why:** agents accumulate operational knowledge across sessions, but "where does
+> this note go?" is a question models answer unreliably by hand-rolling shell
+> pipelines over `~/.whisper/` — every invocation is a fresh chance to mis-derive
+> a canonical repo key or scope path. `turu` turns that mechanical layer into a
+> deterministic binary: same inputs, same outputs, every machine.
+> **Status:** [beta](docs/src/status.md) · core key/resolve/append/recall/distill shipped and used by other ecosystem tools · [Motivation & design](docs/src/index.md)
+
 ## What it does
 
 - `turu key` — canonical repo key, branch slug, and worktree slot for the current checkout (the pure determinism core)

@@ -1,0 +1,13 @@
+[book]
+title = "whisper"
+description = "Deterministic knowledge-routing CLI for AI agents — canonical repo keys, branch slugs, scope-based recall"
+authors = ["charly vibes"]
+language = "en"
+src = "docs/src"
+
+[output.html]
+default-theme = "coal"
+preferred-dark-theme = "coal"
+additional-css = ["theme/charly.css"]
+git-repository-url = "https://github.com/charly-vibes/whisper"
+edit-url-template = "https://github.com/charly-vibes/whisper/edit/main/docs/src/{path}"

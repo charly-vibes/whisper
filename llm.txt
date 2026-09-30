@@ -1,0 +1,26 @@
+# whisper (turu)
+
+A deterministic knowledge-routing CLI for AI agents: canonical repo keys,
+branch slugs, and scope-based knowledge storage/recall over `~/.whisper/`,
+JSON envelope throughout, built on genesis-vibes conventions.
+
+## Purpose
+
+Agents accumulate operational knowledge across sessions, but "where does this
+note go?" is a question models answer unreliably. turu turns that mechanical
+routing layer into a binary: same inputs, same outputs, every machine.
+
+## Commands
+
+key, resolve, append, recall, distill, bundle, init, status, check,
+consolidate, doctor, sync, feedback, skill install
+
+## Install
+
+cargo install whisper-vibes
+
+## Status
+
+Beta — core works, used in anger by other ecosystem tools. See docs/src/status.md.
+
+Full docs: https://charly-vibes.github.io/whisper/

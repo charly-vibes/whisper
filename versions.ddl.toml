@@ -1,0 +1,10 @@
+# Pinned ecosystem tool versions for this repo's CI and dev setup.
+# Standardization §4: installs are pinned, never `latest` — a broken release
+# of any tool must not break CI of the whole fleet.
+# Update deliberately; the conformance test (dulce-de-leche
+# tests/standard_conformance.rs) requires this file to exist.
+
+[tools]
+# Per the §4 dogfooding matrix (whisper row): pretender + wai required.
+wai = "2026.7.28"
+pretender = "0.3.1"
