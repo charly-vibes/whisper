@@ -1,6 +1,6 @@
 # Status
 
-`whisper` **v0.8.0** — Status: **beta**. Core (key/resolve/append/recall/distill)
+`whisper` **[current release](./release.md)** — Status: **beta**. Core (key/resolve/append/recall/distill)
 works and is used in anger by other ecosystem tools; surface may still shift
 before 1.0.
 

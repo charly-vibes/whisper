@@ -1,6 +1,7 @@
 # Summary
 
 - [What is whisper](index.md)
+- [Release Status](./release.md)
 - [Getting started](getting-started.md)
 - [Configuration](configuration.md)
 - [CLI reference](cli.md)
