@@ -1,6 +1,8 @@
 pre-commit:
   parallel: true
   commands:
+    bd:
+      run: bd hooks run pre-commit
     lint:
       run: just lint
     fmt:
@@ -24,6 +26,8 @@ pre-commit:
 pre-push:
   parallel: true
   commands:
+    bd:
+      run: bd hooks run pre-push
     lint:
       run: just lint
     fmt:
