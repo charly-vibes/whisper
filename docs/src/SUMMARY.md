@@ -1,6 +1,7 @@
 # Summary
 
 - [What is whisper](index.md)
+- [charly-vibes Tool Ecosystem](https://charly-vibes.github.io/dulce-de-leche/ecosystem-map.html)
 - [Release Status](./release.md)
 - [Getting started](getting-started.md)
 - [Configuration](configuration.md)

@@ -19,8 +19,7 @@ Part of the [charly-vibes](https://github.com/charly-vibes) tool suite; built on
 > pipelines over `~/.whisper/` — every invocation is a fresh chance to mis-derive
 > a canonical repo key or scope path. `turu` turns that mechanical layer into a
 > deterministic binary: same inputs, same outputs, every machine.
-> **Status:** [beta](docs/src/status.md) · core key/resolve/append/recall/distill shipped and used by other ecosystem tools · [Motivation & design](docs/src/index.md)
-
+> **Status:** [beta](docs/src/status.md) · core key/resolve/append/recall/distill shipped and used by other ecosystem tools · [Motivation & design](docs/src/index.md) · [charly-vibes Tool Ecosystem](https://charly-vibes.github.io/dulce-de-leche/ecosystem-map.html)
 ## What it does
 
 - `turu key` — canonical repo key, branch slug, and worktree slot for the current checkout (the pure determinism core)
