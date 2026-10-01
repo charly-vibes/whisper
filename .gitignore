@@ -38,3 +38,8 @@ dist/
 docs/src/specs/
 # §6: generated from Cargo.toml by docs.yml — never committed
 docs/src/release.md
+
+# bd gate runtime lock
+.beads.gate.lock
+# mdbook 0.5 fallout: absolute-URL SUMMARY entries materialize as src/https:/ dirs (see specodelic-j0m)
+docs/src/https:/
