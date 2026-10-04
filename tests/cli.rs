@@ -1345,3 +1345,93 @@ fn check_flags_missing_rules_file() {
         .success()
         .stdout(contains("rules file missing"));
 }
+
+// --- append ergonomics (whisper-hpd): positional text + stdin auto-detect ---
+
+#[test]
+fn append_accepts_positional_text() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    // The form agents naturally write: text as a positional argument.
+    turu(tmp.path(), &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "branch", "positional fact"])
+        .assert()
+        .success()
+        .stdout(contains("\"appended_bytes\""));
+
+    let notes = std::fs::read_to_string(repo.join(".whisper/branches/main/notes.md")).unwrap();
+    assert!(notes.contains("positional fact"));
+}
+
+#[test]
+fn append_reads_piped_stdin_without_stdin_flag() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    // Piped stdin is auto-detected: no --stdin flag needed.
+    turu(tmp.path(), &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "branch"])
+        .write_stdin("piped fact\n")
+        .assert()
+        .success();
+
+    let notes = std::fs::read_to_string(repo.join(".whisper/branches/main/notes.md")).unwrap();
+    assert!(notes.contains("piped fact"));
+}
+
+#[test]
+fn append_stdin_flag_before_scope_still_works() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    // Flag-order tolerance: --stdin before the positional scope.
+    turu(tmp.path(), &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "--stdin", "branch"])
+        .write_stdin("ordered fact\n")
+        .assert()
+        .success();
+
+    let notes = std::fs::read_to_string(repo.join(".whisper/branches/main/notes.md")).unwrap();
+    assert!(notes.contains("ordered fact"));
+}
+
+#[test]
+fn append_empty_piped_stdin_still_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    turu(tmp.path(), &repo)
+        .args(["append", "branch"])
+        .write_stdin("")
+        .assert()
+        .failure()
+        .stderr(contains("nothing to append"));
+}
+
+#[test]
+fn append_positional_text_wins_over_piped_stdin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    // When both are present, the explicit text is the payload; stdin is
+    // never consumed (no hang, no double append).
+    turu(tmp.path(), &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "branch", "explicit fact"])
+        .write_stdin("ignored fact\n")
+        .assert()
+        .success();
+
+    let notes = std::fs::read_to_string(repo.join(".whisper/branches/main/notes.md")).unwrap();
+    assert!(notes.contains("explicit fact"));
+    assert!(!notes.contains("ignored fact"));
+}

@@ -104,7 +104,7 @@ fn generate_whisper() -> PackFiles {
     files.insert("subs/append.md".to_string(), sub(
         "whisper/append",
         "Extend-don't-duplicate knowledge into the right file",
-        "1. Search first — check the target file for an existing note on the topic\n2. `turu append <scope> --text \"...\"` — appends verbatim, creates parents. In a checkout, repo/branch scopes default to the checkout's own `.whisper/` (transport decision A: the repo's git is the transport)\n3. `--global` writes the machine-local store instead — the fallback for read-only checkouts (CI, no-push contributors); `--private` writes `.whisper/private/`, gitignored, never pushed\n4. Extend or correct existing notes instead of adding duplicates; no secrets, ever — git history is forever — prevention only",
+        "1. Search first — check the target file for an existing note on the topic\n2. `turu append <scope> \"...\"` — appends verbatim, creates parents. Also accepted: `--text \"...\"` (repeatable), `--stdin`, or piped/heredoc stdin with no flag at all (`turu append branch <<'EOF'`). In a checkout, repo/branch scopes default to the checkout's own `.whisper/` (transport decision A: the repo's git is the transport)\n3. `--global` writes the machine-local store instead — the fallback for read-only checkouts (CI, no-push contributors); `--private` writes `.whisper/private/`, gitignored, never pushed\n4. Extend or correct existing notes instead of adding duplicates; no secrets, ever — git history is forever — prevention only",
     ));
     files.insert("subs/init.md".to_string(), sub(
         "whisper/init",

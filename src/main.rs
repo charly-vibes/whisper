@@ -8,7 +8,7 @@
 //! contract and git's exclusion state never drift apart.
 
 use std::cell::Cell;
-use std::io::{Read, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::process::exit;
 
@@ -65,6 +65,9 @@ enum Commands {
         /// Scope: global | repo | branch | worktree | group
         #[arg()]
         scope: String,
+        /// Text to append (positional alternative to --text).
+        #[arg()]
+        text: Option<String>,
         /// Text to append (repeatable).
         #[arg(long = "text")]
         texts: Vec<String>,
@@ -303,6 +306,7 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
         }
         Commands::Append {
             scope,
+            text,
             texts,
             stdin,
             topic,
@@ -311,10 +315,10 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
             private,
         } => {
             let scope: workspace::Scope = scope.parse()?;
-            let text = collect_text(texts, *stdin)?;
+            let text = collect_text(text.as_deref(), texts, *stdin)?;
             if text.trim().is_empty() {
                 return Err(WhisperError::new("nothing to append")
-                    .with_suggestion("pass --text \"...\" or --stdin"));
+                    .with_suggestion("pass --text \"...\", a positional text, or pipe stdin"));
             }
             let target = append_target(scope, *global, *private, &facts, &resolved)?;
             let ts = entry::parse_or_now(std::env::var("TURU_NOW").ok().as_deref())?;
@@ -786,7 +790,11 @@ fn paths_for(
     Ok(map)
 }
 
-fn collect_text(texts: &[String], use_stdin: bool) -> whisper::Result<String> {
+/// Payload for append, in order of explicitness: --text (repeatable) and the
+/// positional text win over stdin; when neither carries text and stdin is not
+/// a TTY (piped/redirected), stdin is read automatically so the natural
+/// `turu append <scope> <<'EOF'` heredoc form works without --stdin.
+fn collect_text(text: Option<&str>, texts: &[String], use_stdin: bool) -> whisper::Result<String> {
     if use_stdin {
         let mut buf = String::new();
         std::io::stdin()
@@ -794,5 +802,19 @@ fn collect_text(texts: &[String], use_stdin: bool) -> whisper::Result<String> {
             .map_err(WhisperError::from)?;
         return Ok(buf);
     }
-    Ok(texts.join("\n"))
+    let mut joined = texts.to_vec();
+    if let Some(t) = text {
+        joined.push(t.to_owned());
+    }
+    if !joined.is_empty() {
+        return Ok(joined.join("\n"));
+    }
+    if !std::io::stdin().is_terminal() {
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .map_err(WhisperError::from)?;
+        return Ok(buf);
+    }
+    Ok(String::new())
 }
