@@ -1,0 +1,6 @@
+[tools.pretender]
+description = "Multi-language structural code-quality checks"
+
+[tools.pretender.detector]
+type = "file"
+path = "pretender.toml"
