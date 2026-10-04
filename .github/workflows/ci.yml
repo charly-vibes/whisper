@@ -52,14 +52,18 @@ jobs:
           # which must not clobber the repo checkout
           tar -xzf "$tmp/bd.tgz" -C "$tmp" bd
           sudo mv "$tmp/bd" /usr/local/bin/bd
-      # §4 dogfood: installed tools must run, not just install
+      # §4 dogfood: installed tools must run, not just install.
+      # pretender 0.7.0 gates by default; this repo adopts tiered mode under
+      # an advisory lease — 87 pre-existing violations must not block CI.
+      # Renew the lease by pushing the date forward (a visible, reviewable
+      # diff); after expiry the check fails closed by design.
       - name: Smoke dogfooded tools
         env:
           DO_NOT_TRACK: "1"
         run: |
           bd --version >/dev/null
           ddl status >/dev/null
-          pretender check >/dev/null
+          pretender check --advisory-until 2026-11-03 >/dev/null
       # Run the exact same command as local development
       - name: Run CI pipeline
         run: just ci
