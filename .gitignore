@@ -43,3 +43,4 @@ docs/src/release.md
 .beads.gate.lock
 # mdbook 0.5 fallout: absolute-URL SUMMARY entries materialize as src/https:/ dirs (see specodelic-j0m)
 docs/src/https:/
+.pretender/
