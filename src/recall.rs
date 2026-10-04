@@ -47,6 +47,47 @@ pub struct ServedLine {
     pub line: String,
 }
 
+/// Default byte budget for `--digest` recalls with no explicit `--budget`.
+/// Keeps the whole envelope comfortably under the ~50KB harness truncation
+/// line (whisper-2c1: a fat scope's full envelope is ONE compact JSON line —
+/// measured 242KB — that the agent perceives as "no output"), while still
+/// serving hundreds of heads.
+pub const DIGEST_DEFAULT_BUDGET: usize = 40_000;
+
+/// Head cap: a digest line never carries more than this many bytes of
+/// entry/freeform text (whole-entry atomicity in miniature — a head is a
+/// pointer into the scope file, not the text itself).
+const DIGEST_HEAD_CAP: usize = 160;
+
+/// Cap text to the head budget on a char boundary.
+fn cap_head(text: &str) -> String {
+    if text.len() <= DIGEST_HEAD_CAP {
+        return text.to_string();
+    }
+    let mut end = DIGEST_HEAD_CAP;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
+}
+
+/// One capped head line for a served entry: ts, scope tag, topic, first
+/// text line. Later lines never leak (a head points at the scope file —
+/// the full text stays there).
+fn digest_entry_line(scope: &str, e: &entry::Entry) -> String {
+    let tag = match &e.topic {
+        Some(t) => format!("[{scope}#{t}]"),
+        None => format!("[{scope}]"),
+    };
+    let first_line = e.text.split('\n').next().unwrap_or("");
+    format!("{} {} {}", e.ts, tag, cap_head(first_line))
+}
+
+/// One capped head line for a served freeform line (verbatim text, capped).
+fn digest_freeform_line(scope: &str, line: &str) -> String {
+    format!("[{scope}] {}", cap_head(line))
+}
+
 /// One store that participates in recall composition.
 struct Store {
     /// Scope tag for served items.
@@ -136,6 +177,22 @@ fn stores_for(recall: &RecallScope, facts: &Facts, resolved: &Resolved) -> Resul
     }
 }
 
+/// One recall's serving knobs, bundled to keep the call site narrow.
+pub struct RecallQuery {
+    /// Only entries with this topic key.
+    pub topic: Option<String>,
+    /// Byte budget; whole entries only (never truncated).
+    pub budget: Option<usize>,
+    /// Include superseded entries.
+    pub include_superseded: bool,
+    /// Serve capped one-line heads (entries + freeform) instead of full
+    /// entries — the fat-scope-safe default: one JSON line that stays
+    /// under the ~50KB harness truncation limit.
+    pub digest: bool,
+    /// Record served ids to the usage sidecar.
+    pub record_usage: bool,
+}
+
 /// Serve the ranked slice for the requested scope(s). When `record_usage`
 /// is true, every entry actually served gets one usage record appended to
 /// its scope's sidecar (filtered and budget-skipped entries are never
@@ -144,14 +201,19 @@ pub fn recall(
     recall_scope: &RecallScope,
     facts: &Facts,
     resolved: &Resolved,
-    topic: Option<&str>,
-    budget: Option<usize>,
-    include_superseded: bool,
-    record_usage: bool,
+    query: &RecallQuery,
 ) -> Result<Value> {
     let mut entries: Vec<Served> = Vec::new();
     let mut lines: Vec<ServedLine> = Vec::new();
+    let mut digest_lines: Vec<String> = Vec::new();
     let mut served_bytes = 0usize;
+    // Digest budget: explicit --budget wins; otherwise the digest default
+    // caps the envelope under the harness truncation line.
+    let budget = if query.digest {
+        query.budget.or(Some(DIGEST_DEFAULT_BUDGET))
+    } else {
+        query.budget
+    };
     let mut entries_skipped = 0usize;
     let mut freeform_skipped = 0usize;
     let mut served_ids = std::collections::HashSet::new();
@@ -191,8 +253,8 @@ pub fn recall(
                 Item::Line(_) => {}
             }
         }
-        scoped.retain(|e| include_superseded || e.superseded_by.is_none());
-        if let Some(t) = topic {
+        scoped.retain(|e| query.include_superseded || e.superseded_by.is_none());
+        if let Some(t) = &query.topic {
             scoped.retain(|e| e.topic.as_deref() == Some(t));
         }
         scoped.sort_by(|a, b| b.ts.cmp(&a.ts));
@@ -201,12 +263,18 @@ pub fn recall(
             if !served_ids.insert(e.id.clone()) {
                 continue; // same entry reached through another store
             }
-            let cost = e.render().len();
+            let cost = match query.digest {
+                true => digest_entry_line(scope_name, &e).len() + 1,
+                false => e.render().len(),
+            };
             match budget {
                 Some(b) if served_bytes + cost > b => entries_skipped += 1,
                 _ => {
                     served_bytes += cost;
-                    if record_usage {
+                    if query.digest {
+                        digest_lines.push(digest_entry_line(scope_name, &e));
+                    }
+                    if query.record_usage {
                         usage_batch
                             .entry(path.clone())
                             .or_insert_with(|| {
@@ -223,15 +291,22 @@ pub fn recall(
             }
         }
         for l in freeform {
-            let cost = l.len() + 1;
+            let cost = match query.digest {
+                true => digest_freeform_line(scope_name, &l).len() + 1,
+                false => l.len() + 1,
+            };
             match budget {
                 Some(b) if served_bytes + cost > b => freeform_skipped += 1,
                 _ => {
                     served_bytes += cost;
-                    lines.push(ServedLine {
-                        scope: scope_name,
-                        line: l,
-                    });
+                    if query.digest {
+                        digest_lines.push(digest_freeform_line(scope_name, &l));
+                    } else {
+                        lines.push(ServedLine {
+                            scope: scope_name,
+                            line: l,
+                        });
+                    }
                 }
             }
         }
@@ -245,9 +320,29 @@ pub fn recall(
         }
     }
 
-    if entries.is_empty() && lines.is_empty() && entries_skipped == 0 {
-        return Err(WhisperError::new("nothing to recall in this scope")
-            .with_suggestion("turu init to create the layout, or append entries first"));
+    // Empty-scope semantics (whisper-2c1): an empty scope is an empty
+    // answer, not a hard failure — ok:true with empty data and exit 0, so
+    // && chains and set -e survive it. The emptiness rides in the envelope
+    // ("empty": true) and main.rs surfaces it as an advisory warning.
+    let nothing_served =
+        entries.is_empty() && lines.is_empty() && digest_lines.is_empty() && entries_skipped == 0;
+
+    if query.digest {
+        return Ok(json!({
+            "scope": match recall_scope {
+                RecallScope::All => "all".to_string(),
+                RecallScope::One(s) => scope_name(*s).to_string(),
+            },
+            "topic": query.topic,
+            "digest": true,
+            "empty": nothing_served,
+            "lines": digest_lines,
+            "served_bytes": served_bytes,
+            "budget_unused": budget.map(|b| b.saturating_sub(served_bytes)),
+            "entries_skipped": entries_skipped,
+            "freeform_skipped": freeform_skipped,
+            "usage_recorded": query.record_usage.then_some(recorded),
+        }));
     }
 
     Ok(json!({
@@ -255,14 +350,15 @@ pub fn recall(
             RecallScope::All => "all".to_string(),
             RecallScope::One(s) => scope_name(*s).to_string(),
         },
-        "topic": topic,
+        "topic": query.topic,
+        "empty": nothing_served,
         "entries": entries,
         "freeform": lines,
         "served_bytes": served_bytes,
         "budget_unused": budget.map(|b| b.saturating_sub(served_bytes)),
         "entries_skipped": entries_skipped,
         "freeform_skipped": freeform_skipped,
-        "usage_recorded": record_usage.then_some(recorded),
+        "usage_recorded": query.record_usage.then_some(recorded),
     }))
 }
 

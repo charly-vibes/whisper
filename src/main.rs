@@ -101,6 +101,11 @@ enum Commands {
         /// Byte budget; whole entries only (never truncated).
         #[arg(long)]
         budget: Option<usize>,
+        /// Serve capped one-line heads (entries + freeform) instead of full
+        /// entries — the fat-scope-safe default: one JSON line that stays
+        /// under the ~50KB harness truncation limit.
+        #[arg(long)]
+        digest: bool,
         /// Include superseded entries.
         #[arg(long)]
         include_superseded: bool,
@@ -357,6 +362,7 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
             scope,
             topic,
             budget,
+            digest,
             include_superseded,
             no_usage,
         } => {
@@ -365,14 +371,26 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                 &recall_scope,
                 &facts,
                 &resolved,
-                topic.as_deref(),
-                *budget,
-                *include_superseded,
-                !*no_usage,
+                &recall::RecallQuery {
+                    topic: topic.clone(),
+                    budget: *budget,
+                    include_superseded: *include_superseded,
+                    digest: *digest,
+                    record_usage: !*no_usage,
+                },
             )?;
+            // Empty scope (whisper-2c1): ok:true + advisory warning, never
+            // a hard failure that breaks && chains or set -e.
+            let mut warnings = vec![];
+            if data.get("empty") == Some(&serde_json::Value::Bool(true)) {
+                warnings.push(
+                    "scope is empty — nothing to recall; append entries or check the routing block"
+                        .into(),
+                );
+            }
             (
                 data,
-                vec![],
+                warnings,
                 Some("recall serves mechanically — when to load it is your policy".into()),
             )
         }

@@ -1453,3 +1453,127 @@ fn extract_id(path: &Path, needle: &str) -> String {
     let tok = line.split("[id:").nth(1).unwrap();
     tok.split(']').next().unwrap().to_string()
 }
+
+// ---------------------------------------------------------------------------
+// recall --digest + empty-scope semantics (whisper-2c1)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn recall_digest_serves_capped_heads_including_freeform() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    let long_text =
+        "first line of the long entry\nsecond line with detail that must not leak into a head";
+    let path = resolve_repo_path(&home, &repo);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    // Freeform lines live in the repo scope file itself (recall never
+    // searches, only reads the exact scope path); seeded before the appends
+    // so append's structured writes preserve them.
+    std::fs::write(
+        &path,
+        "## notes\nfreeform heading\nmulti freeform line one\ntwo\n",
+    )
+    .unwrap();
+    for (now, text, topic) in [
+        ("2026-01-01T00:00:00Z", long_text, Some("infra")),
+        ("2026-01-02T00:00:00Z", "short fact", None),
+    ] {
+        let mut cmd = turu(&home, &repo);
+        cmd.env("TURU_NOW", now);
+        cmd.args(["append", "repo", "--text", text]);
+        if let Some(t) = topic {
+            cmd.args(["--topic", t]);
+        }
+        cmd.assert().success();
+    }
+
+    let out = String::from_utf8(
+        turu(&home, &repo)
+            .args(["recall", "repo", "--digest", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+
+    // Digest mode is a compact line-oriented slice, not the full envelope.
+    assert!(out.contains("\"digest\":true"), "{out}");
+    // Every entry is one capped head line: ts, scope tag, topic, first line.
+    assert!(out.contains("first line of the long entry"), "{out}");
+    // Whole-entry atomicity: later lines never leak into a head.
+    assert!(!out.contains("second line with detail"), "{out}");
+    // Freeform lines are included verbatim (jq-over-entries-only digests
+    // were lossy — freeform was missed entirely).
+    assert!(out.contains("freeform heading"), "{out}");
+    assert!(out.contains("multi freeform line one"), "{out}");
+    // Scope tags ride on each digest line.
+    assert!(out.contains("[repo#infra]"), "{out}");
+    assert!(out.contains("[repo] short fact"), "{out}");
+}
+
+#[test]
+fn recall_digest_bounds_a_fat_scope_under_the_harness_limit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+    // ~300 entries x ~2KB texts = a scope whose full envelope is one fat
+    // JSON line (~600KB) that harness truncation turns into "(no output)".
+    let fat = "x".repeat(2000);
+    for i in 0..300 {
+        turu(&home, &repo)
+            .env(
+                "TURU_NOW",
+                format!("2026-01-{:02}T00:00:{:02}Z", i % 28 + 1, i % 60),
+            )
+            .args(["append", "repo", "--text", &format!("{fat} entry {i}")])
+            .assert()
+            .success();
+    }
+
+    let out_bytes = turu(&home, &repo)
+        .args(["recall", "repo", "--digest", "--json"])
+        .output()
+        .unwrap()
+        .stdout;
+    let out = String::from_utf8(out_bytes.clone()).unwrap();
+
+    assert!(
+        out_bytes.len() < 50_000,
+        "digest output {} bytes crosses the ~50KB harness truncation line",
+        out_bytes.len()
+    );
+    // The bound comes from a default digest budget: some heads were skipped.
+    assert!(out.contains("\"entries_skipped\":"), "{out}");
+    let skipped: usize = out
+        .split("\"entries_skipped\":")
+        .nth(1)
+        .unwrap()
+        .split([',', '}'])
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(
+        skipped > 0,
+        "expected a default digest budget to skip heads: {out}"
+    );
+}
+
+#[test]
+fn recall_empty_scope_is_ok_true_not_a_hard_failure() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, repo) = repo_env(&tmp);
+
+    let out = turu(&home, &repo)
+        .args(["recall", "repo", "--json"])
+        .output()
+        .unwrap();
+
+    // An empty scope is an empty answer, not a failure: exit 0, ok:true,
+    // empty entries — && chains and set -e must survive it.
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("\"ok\":true"), "{stdout}");
+    assert!(stdout.contains("\"entries\":[]"), "{stdout}");
+    // The emptiness is surfaced as an advisory warning, not an error.
+    assert!(stdout.contains("nothing to recall"), "{stdout}");
+}

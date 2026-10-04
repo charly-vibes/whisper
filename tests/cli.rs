@@ -455,10 +455,15 @@ fn private_zone_is_exact_path_only() {
     std::fs::create_dir_all(&nested).unwrap();
     std::fs::write(nested.join("notes.md"), "nested private line\n").unwrap();
 
-    turu(tmp.path(), &repo)
+    let out = turu(tmp.path(), &repo)
         .args(["recall", "branch", "--json"])
-        .assert()
-        .failure(); // nothing servable in this scope — nested dir invisible
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    // Nothing servable in this scope — the nested dir is invisible, so the
+    // recall is ok:true-empty (whisper-2c1 semantics), never an error.
+    assert!(stdout.contains("\"empty\":true"), "{stdout}");
+    assert!(!stdout.contains("nested private line"), "{stdout}");
 }
 
 // whisper-4xo — tasks 2.3–2.6 of add-repo-private-scope: transport and
