@@ -1435,3 +1435,41 @@ fn append_positional_text_wins_over_piped_stdin() {
     assert!(notes.contains("explicit fact"));
     assert!(!notes.contains("ignored fact"));
 }
+
+// --- one-call recall loop (whisper-s8r): 'recall all' composes precedence ---
+
+#[test]
+fn recall_all_composes_global_repo_and_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
+
+    // One entry per layer, distinct timestamps.
+    turu(tmp.path(), &repo)
+        .env("TURU_NOW", "2026-01-01T00:00:00Z")
+        .args(["append", "global", "global layer fact"])
+        .assert()
+        .success();
+    turu(tmp.path(), &repo)
+        .env("TURU_NOW", "2026-01-02T00:00:00Z")
+        .args(["append", "repo", "repo layer fact"])
+        .assert()
+        .success();
+    turu(tmp.path(), &repo)
+        .env("TURU_NOW", "2026-01-03T00:00:00Z")
+        .args(["append", "branch", "branch layer fact"])
+        .assert()
+        .success();
+
+    // One call serves every layer — the session-start read.
+    let out = turu(tmp.path(), &repo)
+        .args(["recall", "all", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let json = String::from_utf8_lossy(&out.stdout);
+    // Served via the envelope's entries: all three layers present.
+    assert!(json.contains("global layer fact"));
+    assert!(json.contains("repo layer fact"));
+    assert!(json.contains("branch layer fact"));
+}

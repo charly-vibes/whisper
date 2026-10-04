@@ -280,7 +280,7 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
             (
                 data,
                 vec![],
-                Some("whisper resolve <scope> to get an exact write destination".into()),
+                Some("turu resolve <scope> to get an exact write destination".into()),
             )
         }
         Commands::Resolve {
@@ -299,7 +299,7 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
                 data,
                 vec![],
                 Some(format!(
-                    "whisper append {} --text \"...\"",
+                    "turu append {} --text \"...\" (positional text or piped stdin also work)",
                     scope_name(target.scope)
                 )),
             )
@@ -472,7 +472,7 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
             (
                 data,
                 vec![],
-                Some("whisper status to see the full layout".to_string()),
+                Some("turu status to see the full layout".to_string()),
             )
         }
         Commands::Status => {
@@ -487,7 +487,7 @@ fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
             (
                 data,
                 vec![],
-                Some("whisper check to validate the workspace".to_string()),
+                Some("turu check to validate the workspace".to_string()),
             )
         }
         Commands::Check => {
