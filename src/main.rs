@@ -796,11 +796,7 @@ fn paths_for(
 /// `turu append <scope> <<'EOF'` heredoc form works without --stdin.
 fn collect_text(text: Option<&str>, texts: &[String], use_stdin: bool) -> whisper::Result<String> {
     if use_stdin {
-        let mut buf = String::new();
-        std::io::stdin()
-            .read_to_string(&mut buf)
-            .map_err(WhisperError::from)?;
-        return Ok(buf);
+        return read_stdin();
     }
     let mut joined = texts.to_vec();
     if let Some(t) = text {
@@ -810,11 +806,15 @@ fn collect_text(text: Option<&str>, texts: &[String], use_stdin: bool) -> whispe
         return Ok(joined.join("\n"));
     }
     if !std::io::stdin().is_terminal() {
-        let mut buf = String::new();
-        std::io::stdin()
-            .read_to_string(&mut buf)
-            .map_err(WhisperError::from)?;
-        return Ok(buf);
+        return read_stdin();
     }
     Ok(String::new())
+}
+
+fn read_stdin() -> whisper::Result<String> {
+    let mut buf = String::new();
+    std::io::stdin()
+        .read_to_string(&mut buf)
+        .map_err(WhisperError::from)?;
+    Ok(buf)
 }
