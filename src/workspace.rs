@@ -584,12 +584,16 @@ pub enum PrivateZoneState {
     Exposed,
 }
 
-/// Effective-ignore state of the checkout's private zone: `git
-/// check-ignore` is the truth, not text presence — a nested `.gitignore`
-/// (or the user's global excludes file) can already carry the rule. The
-/// probe is a synthetic file path *under* the zone: a dir-only pattern
-/// (`private/`) does not match the bare directory name before the
-/// directory exists, but it must match every file the zone will contain.
+/// Effective-ignore state of the checkout's private zone: git's
+/// check-ignore verdict (via `genesis::git::is_ignored`) is the truth, not
+/// text presence — a nested `.gitignore` (or the user's global excludes
+/// file) can already carry the rule. The probe is a synthetic file path
+/// *under* the zone: a dir-only pattern (`private/`) does not match the
+/// bare directory name before the directory exists, but it must match
+/// every file the zone will contain.
+///
+/// Fail-closed: a git failure (spawn error, exit ≥ 128) reads as
+/// `Exposed` — the zone counts as reachable unless git proves it ignored.
 pub fn private_zone_state(facts: &Facts) -> PrivateZoneState {
     let Some(local_root) = &facts.repo_local_root else {
         return PrivateZoneState::NoCheckout;
@@ -597,22 +601,21 @@ pub fn private_zone_state(facts: &Facts) -> PrivateZoneState {
     let checkout = local_root
         .parent()
         .expect("repo-local root always has a parent (the checkout)");
-    let rel = Path::new(REPO_LOCAL_DIR).join("private");
-    let probe = format!("{}/probe", rel.to_string_lossy());
-    let out = Command::new("git")
-        .args(["check-ignore", "-q", "--", &probe])
-        .current_dir(checkout)
-        .output();
-    if matches!(out, Ok(o) if o.status.code() == Some(0)) {
-        PrivateZoneState::Ignored
-    } else {
-        PrivateZoneState::Exposed
+    let probe = checkout.join(REPO_LOCAL_DIR).join("private").join("probe");
+    match genesis::git::is_ignored(checkout, &probe) {
+        Ok(true) => PrivateZoneState::Ignored,
+        Ok(false) | Err(_) => PrivateZoneState::Exposed,
     }
 }
 
 /// Files tracked by git under the checkout's private zone. Tracked files
 /// mean the knowledge is already in history — git history is forever,
 /// so doctor reports this as a prominent failure, never a warning.
+///
+/// The zone is walked from the working tree and each file is probed with
+/// `genesis::git::tracked`. Fail-closed: when git cannot answer for a
+/// file, it is reported as tracked — the leak check must not silently
+/// skip.
 pub fn tracked_files_under_private_zone(facts: &Facts) -> Vec<PathBuf> {
     let Some(local_root) = &facts.repo_local_root else {
         return Vec::new();
@@ -620,18 +623,27 @@ pub fn tracked_files_under_private_zone(facts: &Facts) -> Vec<PathBuf> {
     let checkout = local_root
         .parent()
         .expect("repo-local root always has a parent (the checkout)");
-    let rel = Path::new(REPO_LOCAL_DIR).join("private");
-    let out = Command::new("git")
-        .args(["ls-files", "--", &rel.to_string_lossy()])
-        .current_dir(checkout)
-        .output();
-    match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| checkout.join(l.trim()))
-            .collect(),
-        _ => Vec::new(),
+    let zone = checkout.join(REPO_LOCAL_DIR).join("private");
+    let mut files = Vec::new();
+    collect_worktree_files(&zone, &mut files);
+    files.sort();
+    files.retain(|f| genesis::git::tracked(checkout, f).unwrap_or(true));
+    files
+}
+
+/// Recursively collect worktree files under `dir` (deterministic order
+/// comes from the caller's sort; missing/unreadable dirs yield nothing).
+fn collect_worktree_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_worktree_files(&path, out);
+        } else {
+            out.push(path);
+        }
     }
 }
 
