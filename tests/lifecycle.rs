@@ -1,6 +1,7 @@
 //! End-to-end tests for the knowledge lifecycle changes: structured
 //! entries (add-entry-model), recall serving, the distill contract, and
 //! shared bundles.
+mod common;
 
 use std::path::Path;
 use std::process::Command;

@@ -64,3 +64,33 @@ impl From<std::io::Error> for WhisperError {
 }
 
 pub type Result<T> = std::result::Result<T, WhisperError>;
+
+#[cfg(test)]
+mod hook_env_hygiene {
+    //! Same strip as tests/common/mod.rs, for the lib unit-test binary
+    //! (workspace.rs fixtures spawn `git init`; under a worktree hook env
+    //! GIT_DIR would poison them).
+
+    #[cfg(unix)]
+    #[used]
+    #[unsafe(link_section = ".init_array")]
+    static STRIP_HOOK_GIT_ENV: extern "C" fn() = strip_hook_git_env;
+
+    #[cfg(unix)]
+    extern "C" fn strip_hook_git_env() {
+        for var in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_PREFIX",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_QUARANTINE_PATH",
+        ] {
+            // Safe: called once at process init, before test threads spawn.
+            unsafe { std::env::remove_var(var) };
+        }
+    }
+}

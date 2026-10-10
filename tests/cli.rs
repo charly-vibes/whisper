@@ -1,5 +1,6 @@
 //! End-to-end CLI tests: determinism of key derivation, scope resolution,
 //! append semantics, and config precedence.
+mod common;
 
 use std::path::Path;
 use std::process::Command;
