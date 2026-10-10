@@ -1271,6 +1271,130 @@ mod tests {
         assert!(!t.ensure().unwrap());
     }
 
+    // --- private-zone git probes (genesis-tpf.6 characterization) ---
+
+    /// Real git checkout under `tmp` with one commit, so check-ignore /
+    /// ls-files probes run against a live index.
+    fn committed_checkout() -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let checkout = tmp.path().join("repo");
+        std::fs::create_dir_all(&checkout).unwrap();
+        let git = |args: &[&str]| {
+            let status = Command::new("git")
+                .args(args)
+                .current_dir(&checkout)
+                .status()
+                .expect("git available");
+            assert!(status.success(), "git {:?} failed", args);
+        };
+        git(&["init", "-b", "main"]);
+        git(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "seed",
+        ]);
+        (tmp, checkout)
+    }
+
+    fn checkout_facts(checkout: &Path) -> Facts {
+        Facts {
+            repo_key: "github.com/u/r".into(),
+            branch_slug: "main".into(),
+            worktree_slot: "r".into(),
+            repo_local_root: Some(checkout.join(REPO_LOCAL_DIR)),
+        }
+    }
+
+    #[test]
+    fn private_zone_is_ignored_when_gitignore_covers_it() {
+        let (tmp, checkout) = committed_checkout();
+        std::fs::write(
+            checkout.join(".gitignore"),
+            format!("{REPO_LOCAL_DIR}/private/\n"),
+        )
+        .unwrap();
+        let facts = checkout_facts(&checkout);
+        assert_eq!(private_zone_state(&facts), PrivateZoneState::Ignored);
+        let _ = tmp;
+    }
+
+    #[test]
+    fn private_zone_is_exposed_when_gitignore_does_not_cover_it() {
+        // Tri-state arm: check-ignore exits 1 (not ignored) — that is a
+        // definite Exposed, never a silent skip or an error.
+        let (tmp, checkout) = committed_checkout();
+        std::fs::create_dir_all(checkout.join(REPO_LOCAL_DIR).join("private")).unwrap();
+        let facts = checkout_facts(&checkout);
+        assert_eq!(private_zone_state(&facts), PrivateZoneState::Exposed);
+        let _ = tmp;
+    }
+
+    #[test]
+    fn private_zone_is_exposed_when_git_fails() {
+        // Fail-closed: a git failure (here: spawn against a nonexistent
+        // checkout) must read as Exposed — never silently ignored.
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("nope");
+        let facts = checkout_facts(&missing);
+        assert_eq!(private_zone_state(&facts), PrivateZoneState::Exposed);
+    }
+
+    #[test]
+    fn tracked_files_reports_committed_private_files() {
+        let (tmp, checkout) = committed_checkout();
+        let private = checkout.join(REPO_LOCAL_DIR).join("private");
+        std::fs::create_dir_all(&private).unwrap();
+        std::fs::write(private.join("env.md"), "secret\n").unwrap();
+        let git = |args: &[&str]| {
+            let status = Command::new("git")
+                .args(args)
+                .current_dir(&checkout)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {:?} failed", args);
+        };
+        git(&["add", "-f", ".whisper/private/env.md"]);
+        git(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-m",
+            "leak",
+        ]);
+        let tracked = tracked_files_under_private_zone(&checkout_facts(&checkout));
+        assert_eq!(tracked, vec![private.join("env.md")]);
+        let _ = tmp;
+    }
+
+    #[test]
+    fn tracked_files_reports_untracked_private_files_as_clean() {
+        let (tmp, checkout) = committed_checkout();
+        let private = checkout.join(REPO_LOCAL_DIR).join("private");
+        std::fs::create_dir_all(&private).unwrap();
+        std::fs::write(private.join("env.md"), "secret\n").unwrap();
+        let tracked = tracked_files_under_private_zone(&checkout_facts(&checkout));
+        assert!(tracked.is_empty());
+        let _ = tmp;
+    }
+
+    #[test]
+    fn tracked_files_is_empty_outside_a_checkout() {
+        let facts = Facts {
+            repo_key: "github.com/u/r".into(),
+            branch_slug: "main".into(),
+            worktree_slot: "r".into(),
+            repo_local_root: None,
+        };
+        assert!(tracked_files_under_private_zone(&facts).is_empty());
+    }
+
     #[test]
     fn init_provisions_both_layers_when_in_a_checkout() {
         let tmp = tempfile::tempdir().unwrap();
