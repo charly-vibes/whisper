@@ -1,6 +1,34 @@
+[tools.wai]
+description = "Workflow manager for AI-assisted development"
+
+[tools.wai.detector]
+type = "directory"
+path = ".wai"
+
 [tools.pretender]
 description = "Multi-language structural code-quality checks"
 
 [tools.pretender.detector]
 type = "file"
 path = "pretender.toml"
+
+[tools.testaruda]
+description = "Language-agnostic test selection engine"
+
+[tools.testaruda.detector]
+type = "file"
+path = "testaruda.toml"
+
+[tools.vampiro]
+description = "A program analysis tool for verifying compliance with laws and policies"
+
+[tools.vampiro.detector]
+type = "directory"
+path = ".vampiro"
+
+[tools.espectacular]
+description = "Spec-test correspondence enforcer"
+
+[tools.espectacular.detector]
+type = "directory"
+path = ".espectacular"
