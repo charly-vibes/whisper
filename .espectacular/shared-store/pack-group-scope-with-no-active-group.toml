@@ -1,0 +1,6 @@
+id = "pack-group-scope-with-no-active-group"
+description = ""
+archetype = "PF"
+status = "active"
+superseded_by = ""
+authored_with = "0.11.0"

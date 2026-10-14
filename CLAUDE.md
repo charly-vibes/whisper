@@ -1,3 +1,82 @@
+<!-- WAI:START --># Workflow Tools
+
+This project uses **wai** to track the *why* behind decisions — research,
+reasoning, and design choices that shaped the code. Run `wai status` first
+to orient yourself.
+
+Detected workflow tools:
+- **wai** — research, reasoning, and design decisions
+- **beads** — issue tracking (tasks, bugs, dependencies). CLI command: **`bd`** (not `beads`)
+- **openspec** — specifications and change proposals (see `openspec/AGENTS.md`)
+
+> **CRITICAL**: Apply TDD and Tidy First throughout — not just when writing code:
+> - **Planning/task creation**: each ticket should map to a red→green→refactor cycle; refactoring tasks must be separate tickets from feature tasks.
+> - **Design**: define the test shape (inputs/outputs) before designing the implementation.
+> - **Implementation**: write the failing test first, then make it pass, then tidy in a separate commit.
+
+> **When beginning research or creating a ticket**: run `wai search "<topic>"` to check for existing patterns before writing new content.
+
+## Quick Start
+
+1. `wai sync` — ensure agent tools are projected
+2. `wai status` — see active projects, phase, and suggestions
+3. `bd ready` — find available work items
+
+When context reaches ~40%: stop and tell the user — responses degrade past
+this point. Recommend `wai close` then `/clear` to resume cleanly.
+Do NOT skip `wai close` — it enables resume detection.
+
+## Autonomous Work Policy
+
+Proceed without routine confirmation when the next step is clear.
+Do not ask to continue, fix, or commit — just do it.
+
+**Stop and ask** only when:
+- Conflicting requirements or ambiguous intent
+- Destructive actions (data loss, force-push, drop table)
+- Credentials, secrets, or external services not yet authorized
+- Unresolved test failures after two attempts
+- Push, deploy, or release — always get explicit authorization
+- Context approaching 40% — recommend `wai close` then `/clear`
+
+## Detailed Instructions
+
+Full workflow reference — session lifecycle, capturing work, command cheat
+sheets, cross-tool sync, and PARA structure — lives in **`.wai/AGENTS.md`**.
+Read it at the start of your first session or when you need detailed guidance.
+
+Keep this managed block so `wai init` can refresh the instructions.
+
+
+<!-- provenance: generator=wai version=0.12.3 source=WAI sha=3e02f7c4 -->
+<!-- WAI:END -->
+
+<!-- ah:managed:start -->
+## espectacular
+
+Run `ah check` to verify spec-test correspondence before committing.
+
+- `ah check` — validate all deployed specs
+- `ah check --changes <name>` — validate with a change overlay
+- `ah init` — set up or refresh espectacular project files
+- `ah doctor` — diagnose setup issues
+- `ah explain <topic>` — playbook guidance for finding kinds and suggested actions
+- `ah doctor --enable <adapter>` — write adapter config into .espectacular/config.toml
+- `ah signals` — emit dont drift signals
+<!-- ah:managed:end -->
+
+<!-- DONT:START -->
+# DONT MANAGED BLOCK — DO NOT EDIT
+
+This project uses `dont` for grounded-claim workflow.
+
+At session start run `dont prime --json`.
+
+Canonical agent instructions: `.dont/AGENTS.md`.
+
+Edits inside this managed block will be overwritten by `dont doctor --fix`.
+<!-- DONT:END -->
+
 # Project Instructions for AI Agents
 
 This file provides instructions and context for AI coding agents working on this project.
@@ -68,3 +147,14 @@ _Add a brief overview of your project architecture_
 ## Conventions & Patterns
 
 _Add your project-specific conventions here_
+
+<!-- WAI:REFLECT:REF:START -->
+## Accumulated Project Patterns
+
+Project-specific conventions, gotchas, and architecture notes live in
+`.wai/resources/reflections/`. Run `wai search "<topic>"` to retrieve relevant
+context before starting research or creating tickets.
+
+> **Before research or ticket creation**: always run `wai search "<topic>"` to
+> check for known patterns. Do not rediscover what is already documented.
+<!-- WAI:REFLECT:REF:END -->

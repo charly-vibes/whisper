@@ -1,0 +1,3 @@
+install_source = "auto"
+auto_upgrade = false
+gitignore_strategy = "prompt"
