@@ -25,3 +25,7 @@ The command is `turu` — following the song's *turututu* riff. `turututu` and
 Part of the [charly-vibes](https://github.com/charly-vibes) tool suite; built on
 [genesis-vibes](https://github.com/charly-vibes/genesis) for the JSON envelope,
 config, and CLI conventions shared across the family.
+
+## Ecosystem
+
+whisper is part of the [charly-vibes Tool Ecosystem](https://charly-vibes.github.io/dulce-de-leche/ecosystem-map.html) — the map shows how it relates to its sibling tools.
