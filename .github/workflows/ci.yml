@@ -65,5 +65,9 @@ jobs:
           ddl status >/dev/null
           pretender check --advisory-until 2026-11-03 >/dev/null
       # Run the exact same command as local development
+      # DDL-43g: smoke our own live Pages URL — a 404'd book must fail this
+      # repo's CI immediately, not wait for the next hub conformance run.
+      - name: Smoke live Pages URL
+        run: curl -fsS --max-time 10 --retry 2 https://charly-vibes.github.io/whisper/ >/dev/null
       - name: Run CI pipeline
         run: just ci
