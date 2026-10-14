@@ -128,3 +128,8 @@ Determinism guarantee: canonical key derivation is a pure function of the remote
 ## License
 
 MIT
+
+## Documentation provenance
+
+Rendered docs are generated artifacts; the repository sources are
+authoritative — edit the repo sources, not the rendered output.
