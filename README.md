@@ -38,6 +38,18 @@ Part of the [charly-vibes](https://github.com/charly-vibes) tool suite; built on
 
 ## Install
 
+### Binary (curl)
+
+```bash
+V=$(basename "$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+  https://github.com/charly-vibes/whisper/releases/latest)" | sed 's/^v//')
+TGT="$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/^x86_64$/amd64/; s/^aarch64$/arm64/')"
+curl -fsSL "https://github.com/charly-vibes/whisper/releases/download/v${V}/turu_${V}_${TGT}.tar.gz" | tar xz
+chmod +x turu turututu whisper && sudo mv turu turututu whisper /usr/local/bin/
+```
+
+### Cargo
+
 ```bash
 cargo install whisper-vibes
 ```

@@ -70,6 +70,9 @@ jobs:
       - name: Build docs
         run: mdbook build
 
+      - name: Copy LLM summaries to site root
+        run: cp llms.txt llm.txt book/
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
