@@ -594,7 +594,8 @@ fn init_provisions_the_escape_hatch_layer() {
     turu(tmp.path(), &repo)
         .args(["init", "--json"])
         .assert()
-        .success();
+        .success()
+        .stdout(contains("\"created\""));
 
     // Checkout layer ...
     assert!(repo.join(".whisper/env.md").exists());
@@ -1477,4 +1478,207 @@ fn recall_all_composes_global_repo_and_branch() {
     assert!(json.contains("global layer fact"));
     assert!(json.contains("repo layer fact"));
     assert!(json.contains("branch layer fact"));
+}
+
+// ---------------------------------------------------------------------------
+// Deployed-spec contract bindings (whisper-15z): scenarios that had no
+// executable verification. Each test maps 1:1 to one .espectacular contract.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn feature_branch_slug_is_double_dashed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "https://github.com/u/r.git");
+    let status = Command::new("git")
+        .args(["checkout", "-b", "feature/login-fix"])
+        .current_dir(&repo)
+        .status()
+        .unwrap();
+    assert!(status.success(), "branch created");
+
+    turu(tmp.path(), &repo)
+        .args(["resolve", "branch", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("branches/feature--login-fix/notes.md"));
+}
+
+#[test]
+fn linked_worktree_shares_the_slot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "https://github.com/u/r.git");
+    let worktree = tmp.path().join("wt");
+    let status = Command::new("git")
+        .args([
+            "worktree",
+            "add",
+            &worktree.to_string_lossy(),
+            "-b",
+            "wt-branch",
+        ])
+        .current_dir(&repo)
+        .status()
+        .unwrap();
+    assert!(status.success(), "worktree added");
+
+    // Main checkout and linked worktree share the common dir basename (.git).
+    turu(tmp.path(), &repo)
+        .args(["resolve", "worktree", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("worktrees/.git/env.md"));
+    turu(tmp.path(), &worktree)
+        .args(["resolve", "worktree", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("worktrees/.git/env.md"));
+}
+
+#[test]
+fn bare_repo_uses_the_bare_dir_as_slot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bare = tmp.path().join("repo.git");
+    let status = Command::new("git")
+        .args(["init", "--bare", &bare.to_string_lossy()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "bare repo created");
+
+    turu(tmp.path(), &bare)
+        .args(["resolve", "worktree", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("worktrees/repo.git/env.md"));
+}
+
+#[test]
+fn status_is_side_effect_free() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "https://github.com/u/r.git");
+    turu(tmp.path(), &repo).args(["init"]).assert().success();
+    turu(tmp.path(), &repo).args(["sync"]).assert().success();
+
+    let tree_snapshot = |dir: &Path| -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for entry in std::fs::read_dir(&d).unwrap().flatten() {
+                let path = entry.path();
+                if entry.file_type().unwrap().is_dir() {
+                    stack.push(path);
+                } else if entry.file_type().unwrap().is_file() {
+                    // Regular files only: git may leave sockets (e.g.
+                    // fsmonitor--daemon.ipc) that cannot be read.
+                    let rel = path
+                        .strip_prefix(dir)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned();
+                    out.push((rel, std::fs::read(&path).unwrap()));
+                }
+            }
+        }
+        out.sort();
+        out
+    };
+
+    let before = tree_snapshot(&repo);
+    turu(tmp.path(), &repo)
+        .args(["status", "--json"])
+        .assert()
+        .success();
+    let after = tree_snapshot(&repo);
+    assert_eq!(before, after, "status must not modify the workspace layout");
+}
+
+#[test]
+fn re_sync_updates_only_the_block() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "https://github.com/u/r.git");
+    std::fs::write(repo.join("AGENTS.md"), "preamble kept intact\n").unwrap();
+
+    turu(tmp.path(), &repo).args(["sync"]).assert().success();
+    let first = std::fs::read_to_string(repo.join("AGENTS.md")).unwrap();
+    assert!(
+        first.contains("preamble kept intact\n"),
+        "content preserved"
+    );
+
+    turu(tmp.path(), &repo).args(["sync"]).assert().success();
+    let second = std::fs::read_to_string(repo.join("AGENTS.md")).unwrap();
+    // Outside the block, content is byte-identical; exactly one block.
+    assert_eq!(second.matches("TURU:START").count(), 1);
+    let strip = |s: &str| -> String {
+        s.split("<!-- TURU:START -->")
+            .next()
+            .unwrap_or(s)
+            .to_string()
+    };
+    assert_eq!(
+        strip(&first),
+        strip(&second),
+        "content outside the block untouched"
+    );
+}
+
+#[test]
+fn sync_file_override_targets_the_named_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "https://github.com/u/r.git");
+
+    turu(tmp.path(), &repo)
+        .args(["sync", "--file", "CLAUDE.md", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("CLAUDE.md"))
+        .stdout(contains("\"created\""));
+
+    assert!(
+        std::fs::read_to_string(repo.join("CLAUDE.md"))
+            .unwrap()
+            .contains("<!-- TURU:START -->")
+    );
+    assert!(!repo.join("AGENTS.md").exists(), "default target untouched");
+}
+
+#[test]
+fn managed_block_paths_match_resolve() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "https://github.com/u/r.git");
+    turu(tmp.path(), &repo).args(["sync"]).assert().success();
+    let block = std::fs::read_to_string(repo.join("AGENTS.md")).unwrap();
+
+    for (scope, marker) in [("repo", "repo → `"), ("branch", "branch → `")] {
+        let start = block.find(marker).expect("block lists scope");
+        let rest = &block[start + marker.len()..];
+        let path = &rest[..rest.find('`').expect("path closed")];
+        turu(tmp.path(), &repo)
+            .args(["resolve", scope, "--json"])
+            .assert()
+            .success()
+            .stdout(contains(path));
+    }
+}
+
+#[test]
+fn check_flags_legacy_variants() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "https://github.com/u/r.git");
+    let legacy = tmp.path().join(".whisper/repos/r");
+    std::fs::create_dir_all(&legacy).unwrap();
+    std::fs::write(legacy.join("env.md"), "legacy fact\n").unwrap();
+
+    turu(tmp.path(), &repo)
+        .args(["check", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("legacy repo-key variants"))
+        .stdout(contains("github.com/u/r"));
 }

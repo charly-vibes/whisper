@@ -4,3 +4,6 @@ archetype = "PF"
 status = "active"
 superseded_by = ""
 authored_with = "0.11.0"
+
+[[tests.cargo]]
+flags = "doctor_fails_prominently_on_tracked_files_under_private_zone"

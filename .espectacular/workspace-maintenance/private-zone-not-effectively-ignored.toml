@@ -4,3 +4,6 @@ archetype = "PF"
 status = "active"
 superseded_by = ""
 authored_with = "0.11.0"
+
+[[tests.cargo]]
+flags = "doctor_warns_when_private_zone_is_not_effectively_ignored"

@@ -64,7 +64,7 @@ Baseline spec for existing behavior: workspace lifecycle commands — `init` (ne
 - **THEN** the rule is appended exactly once
 - **AND** the envelope reports it as created
 
-#### Scenario: Idempotent re-init
+#### Scenario: Idempotent ignore rule
 
 - **WHEN** `turu init` runs again after the rule was added
 - **THEN** no duplicate rule is appended

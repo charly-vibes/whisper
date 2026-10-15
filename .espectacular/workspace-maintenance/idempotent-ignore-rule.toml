@@ -1,0 +1,9 @@
+id = "idempotent-ignore-rule"
+description = ""
+archetype = "PF"
+status = "active"
+superseded_by = ""
+authored_with = "0.11.0"
+
+[[tests.cargo]]
+flags = "init_ignore_rule_is_idempotent"

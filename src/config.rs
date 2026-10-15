@@ -256,6 +256,67 @@ repos = ["cv/charly-vibes/whisper"]
     }
 
     #[test]
+    fn repo_config_found_in_a_parent_dir() {
+        // Deployed scenario config-precedence/config-found-in-a-parent:
+        // a call from `<repo>/src/module` applies the config at `<repo>/`.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(repo.join(".whisper")).unwrap();
+        std::fs::create_dir_all(repo.join("src/module")).unwrap();
+        std::fs::write(
+            repo.join(".whisper/config.toml"),
+            "workspace_root = \"ws\"\n",
+        )
+        .unwrap();
+
+        let (dir, cfg) = find_repo_config(&repo.join("src/module")).expect("config found");
+        assert_eq!(dir, repo);
+        assert_eq!(cfg.workspace_root.as_deref(), Some("ws"));
+    }
+
+    #[test]
+    fn nested_config_shadows_the_repo_root() {
+        // Deployed scenario config-precedence/nested-config-shadows-the-repo-root:
+        // the first config found walking up wins; the repo root's config is
+        // not consulted for that invocation.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let sub = repo.join("sub");
+        std::fs::create_dir_all(repo.join(".whisper")).unwrap();
+        std::fs::create_dir_all(sub.join(".whisper")).unwrap();
+        std::fs::create_dir_all(sub.join("deeper")).unwrap();
+        std::fs::write(
+            repo.join(".whisper/config.toml"),
+            "workspace_root = \"root\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            sub.join(".whisper/config.toml"),
+            "workspace_root = \"sub\"\n",
+        )
+        .unwrap();
+
+        let (dir, cfg) = find_repo_config(&sub.join("deeper")).expect("nested config found");
+        assert_eq!(dir, sub);
+        assert_eq!(cfg.workspace_root.as_deref(), Some("sub"));
+    }
+
+    #[test]
+    fn fresh_machine_defaults_to_the_global_store() {
+        // Deployed scenario config-precedence/fresh-machine: no config files
+        // anywhere → scopes resolve under the default workspace root.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("xdg")).unwrap();
+        unsafe { std::env::set_var("HOME", tmp.path()) };
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path().join("xdg")) };
+        let resolved = load(tmp.path(), "github.com/u/r").unwrap();
+        assert_eq!(resolved.workspace_root, tmp.path().join(".whisper"));
+        assert!(resolved.group.is_none());
+        assert!(resolved.shadowed_global_root.is_none());
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+    }
+
+    #[test]
     fn repo_group_not_defined_is_error() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo");

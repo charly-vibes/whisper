@@ -117,8 +117,12 @@ pub fn branch_slug(dir: &Path) -> String {
 
 /// Worktree slot, per the skill rule: basename of the git common dir
 /// (the `.git` worktree dir name), or basename of cwd when not in a repo.
+/// In a bare repo the common dir is the bare dir itself, which git reports
+/// as `.` — the slot is then the bare dir's basename (deployed scenario
+/// workspace-routing/bare-repo).
 pub fn worktree_slot(dir: &Path) -> String {
     match git(dir, &["rev-parse", "--git-common-dir"]) {
+        Some(common_dir) if common_dir == "." => basename(dir),
         Some(common_dir) => basename(Path::new(&common_dir)),
         None => basename(dir),
     }
@@ -597,16 +601,13 @@ pub fn private_zone_state(facts: &Facts) -> PrivateZoneState {
     let checkout = local_root
         .parent()
         .expect("repo-local root always has a parent (the checkout)");
-    let rel = Path::new(REPO_LOCAL_DIR).join("private");
-    let probe = format!("{}/probe", rel.to_string_lossy());
-    let out = Command::new("git")
-        .args(["check-ignore", "-q", "--", &probe])
-        .current_dir(checkout)
-        .output();
-    if matches!(out, Ok(o) if o.status.code() == Some(0)) {
-        PrivateZoneState::Ignored
-    } else {
-        PrivateZoneState::Exposed
+    let probe = checkout.join(REPO_LOCAL_DIR).join("private").join("probe");
+    // Fail-closed at THIS call site (whisper-tlp): genesis::git::is_ignored
+    // distinguishes not-ignored from git failure; a failure cannot prove
+    // the zone safe, so it maps to Exposed and the repair path runs.
+    match genesis::git::is_ignored(checkout, &probe) {
+        Ok(true) => PrivateZoneState::Ignored,
+        Ok(false) | Err(_) => PrivateZoneState::Exposed,
     }
 }
 
@@ -620,18 +621,32 @@ pub fn tracked_files_under_private_zone(facts: &Facts) -> Vec<PathBuf> {
     let checkout = local_root
         .parent()
         .expect("repo-local root always has a parent (the checkout)");
-    let rel = Path::new(REPO_LOCAL_DIR).join("private");
-    let out = Command::new("git")
-        .args(["ls-files", "--", &rel.to_string_lossy()])
-        .current_dir(checkout)
-        .output();
-    match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| checkout.join(l.trim()))
-            .collect(),
-        _ => Vec::new(),
+    let zone = checkout.join(REPO_LOCAL_DIR).join("private");
+    let mut found = Vec::new();
+    walk_files(&zone, &mut found);
+    found.retain(|path| {
+        // Lossy like the pre-port `ls-files` sweep: a file git cannot query
+        // is skipped, never reported as a leak. Ordering is deterministic
+        // (walk_files sorts per directory), matching doctor output needs.
+        genesis::git::tracked(checkout, path).unwrap_or(false)
+    });
+    found
+}
+
+/// Files under `dir`, depth-first, sorted within each directory for
+/// deterministic enumeration order.
+fn walk_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    paths.sort();
+    for path in paths {
+        if path.is_dir() {
+            walk_files(&path, out);
+        } else {
+            out.push(path);
+        }
     }
 }
 
@@ -1134,6 +1149,26 @@ mod tests {
             &PathBuf::from("/checkout/.whisper/private/env.md"),
             &detached
         ));
+    }
+
+    #[test]
+    fn private_zone_state_is_fail_closed_when_git_fails() {
+        // whisper-tlp decision note: genesis::git::is_ignored distinguishes
+        // NotIgnored from Error. A git failure (e.g. check-ignore run outside
+        // a repository, exit >= 128) cannot prove the zone safe, so it maps
+        // to Exposed at THIS call site — the repair path must run.
+        let not_a_repo = tempfile::tempdir().unwrap();
+        let facts = Facts {
+            repo_key: "github.com/u/r".into(),
+            branch_slug: "main".into(),
+            worktree_slot: "r".into(),
+            repo_local_root: Some(not_a_repo.path().join(".whisper")),
+        };
+        assert_eq!(
+            private_zone_state(&facts),
+            PrivateZoneState::Exposed,
+            "git failure must fail closed, not read as safe"
+        );
     }
 
     #[test]

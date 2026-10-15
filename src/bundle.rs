@@ -218,6 +218,46 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    #[test]
+    fn bundle_carries_only_content_and_addressing() {
+        // Deployed scenario shared-store/bundle-carries-no-transport-state:
+        // a bundle contains only knowledge content and addressing (repo key,
+        // scope, entry ids) — no transport-specific fields are required to
+        // unpack it.
+        let tmp = tempfile::tempdir().unwrap();
+        let facts = facts_with_local_root(tmp.path().join("checkout/.whisper").to_str().unwrap());
+        let resolved = resolved_at(tmp.path());
+        let target = workspace::resolve(Scope::Repo, &facts, &resolved).unwrap();
+        target.ensure().unwrap();
+        target.append("transport-free fact").unwrap();
+
+        let out_path = tmp.path().join("bundle.json");
+        pack(
+            Scope::Repo,
+            &facts,
+            &resolved,
+            Some(out_path.to_str().unwrap()),
+        )
+        .unwrap();
+        let raw = std::fs::read_to_string(&out_path).unwrap();
+        let obj: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&raw).unwrap();
+        let mut keys: Vec<&str> = obj.keys().map(|k| k.as_str()).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["entries", "freeform", "repo_key", "scope"]);
+
+        // The same bytes unpack into a fresh workspace with no extra fields.
+        let fresh = tempfile::tempdir().unwrap();
+        let fresh_facts = Facts {
+            repo_key: "cv/charly-vibes/whisper".into(),
+            branch_slug: "main".into(),
+            worktree_slot: ".git".into(),
+            repo_local_root: Some(fresh.path().join("checkout/.whisper")),
+        };
+        let fresh_resolved = resolved_at(fresh.path());
+        let report = unpack(&raw, &fresh_facts, &fresh_resolved).unwrap();
+        assert_eq!(report["added"], 1);
+    }
+
     fn facts_with_local_root(root: &str) -> Facts {
         Facts {
             repo_key: "cv/charly-vibes/whisper".into(),

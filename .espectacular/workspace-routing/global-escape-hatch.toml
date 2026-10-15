@@ -4,3 +4,6 @@ archetype = "PF"
 status = "active"
 superseded_by = ""
 authored_with = "0.11.0"
+
+[[tests.cargo]]
+flags = "resolve_append_global_escape_hatch_writes_the_store"

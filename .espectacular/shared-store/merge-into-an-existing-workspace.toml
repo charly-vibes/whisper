@@ -4,3 +4,6 @@ archetype = "PF"
 status = "active"
 superseded_by = ""
 authored_with = "0.11.0"
+
+[[tests.cargo]]
+flags = "bundle_unpack_is_extend_only_and_skips_duplicates"
