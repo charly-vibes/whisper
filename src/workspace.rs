@@ -14,7 +14,7 @@ use std::process::Command;
 use genesis::managed_block::{BlockDef, BlockInjector, BlockRegistry, InjectResult};
 use serde::{Deserialize, Serialize};
 
-use crate::config::Resolved;
+use crate::config::{Resolved, Routing};
 use crate::entry::{self, Entry, Item};
 use crate::{Result, WhisperError};
 
@@ -468,33 +468,8 @@ pub fn resolve(scope: Scope, facts: &Facts, resolved: &Resolved) -> Result<Targe
             scope,
             path: resolved.workspace_root.join("rules.md"),
         },
-        Scope::Repo => Target {
-            scope,
-            path: match &facts.repo_local_root {
-                Some(root) => root.join("env.md"),
-                None => resolved
-                    .knowledge_root()
-                    .join("repos")
-                    .join(&facts.repo_key)
-                    .join("env.md"),
-            },
-        },
-        Scope::Branch => Target {
-            scope,
-            path: match &facts.repo_local_root {
-                Some(root) => root
-                    .join("branches")
-                    .join(&facts.branch_slug)
-                    .join("notes.md"),
-                None => resolved
-                    .knowledge_root()
-                    .join("repos")
-                    .join(&facts.repo_key)
-                    .join("branches")
-                    .join(&facts.branch_slug)
-                    .join("notes.md"),
-            },
-        },
+        Scope::Repo => repo_branch_target(scope, facts, resolved),
+        Scope::Branch => repo_branch_target(scope, facts, resolved),
         Scope::Worktree => Target {
             scope,
             path: resolved
@@ -716,6 +691,39 @@ fn global_store_scopes(facts: &Facts) -> Vec<Scope> {
 /// Machine-local store destination for `repo`/`branch` scopes (the `--global`
 /// escape hatch; the default destination when there is no checkout). Panics
 /// only on programmer error — these two scopes always resolve.
+/// Repo/branch scope destinations (gh-3): the checkout's committed zone
+/// under `repo-local` routing, the machine-local store otherwise — the
+/// persistent `--global` equivalent. Group routing (when active) and the
+/// `--global`/`--private` per-invocation flags compose on top and keep
+/// priority.
+fn repo_branch_target(scope: Scope, facts: &Facts, resolved: &Resolved) -> Target {
+    let target = |path: PathBuf| -> Target { Target { scope, path } };
+    let root = resolved
+        .knowledge_root()
+        .join("repos")
+        .join(&facts.repo_key);
+    if let Some(checkout) = facts
+        .repo_local_root
+        .as_ref()
+        .filter(|_| resolved.routing == Routing::RepoLocal)
+    {
+        return target(match scope {
+            Scope::Repo => checkout.join("env.md"),
+            _ => checkout
+                .join("branches")
+                .join(&facts.branch_slug)
+                .join("notes.md"),
+        });
+    }
+    target(match scope {
+        Scope::Repo => root.join("env.md"),
+        _ => root
+            .join("branches")
+            .join(&facts.branch_slug)
+            .join("notes.md"),
+    })
+}
+
 fn global_store_target(scope: Scope, facts: &Facts, resolved: &Resolved) -> Target {
     assert!(
         matches!(scope, Scope::Repo | Scope::Branch),
@@ -786,8 +794,14 @@ pub fn init(facts: &Facts, resolved: &Resolved) -> Result<InitReport> {
 
     // Machine-local store slots for repo/branch: init provisions the layer
     // recall composes and the --global flag writes to, without migrating
-    // anything (add-repo-private-scope decision A).
-    for scope in global_store_scopes(facts) {
+    // anything (add-repo-private-scope decision A). Under machine-local
+    // declarative routing (gh-3) resolve() already provisions that layer —
+    // skip the duplicate pass so no scope gets two provisioning entries.
+    let store_scopes = match resolved.routing {
+        Routing::RepoLocal => global_store_scopes(facts),
+        Routing::MachineLocal => Vec::new(),
+    };
+    for scope in store_scopes {
         let target = global_store_target(scope, facts, resolved);
         if target.ensure().map_err(WhisperError::from)? {
             report.created.push(target.path);
@@ -796,16 +810,13 @@ pub fn init(facts: &Facts, resolved: &Resolved) -> Result<InitReport> {
         }
     }
 
-    // Branch slot also carries context.md and plan.md per the skill layout.
-    let branch_dir = match &facts.repo_local_root {
-        Some(root) => root.join("branches").join(&facts.branch_slug),
-        None => resolved
-            .knowledge_root()
-            .join("repos")
-            .join(&facts.repo_key)
-            .join("branches")
-            .join(&facts.branch_slug),
-    };
+    // Branch slot also carries context.md and plan.md per the skill layout;
+    // it follows the branch scope's resolved home (checkout or store).
+    let branch_dir = resolve(Scope::Branch, facts, resolved)?
+        .path
+        .parent()
+        .expect("branch target always has a parent (the branch dir)")
+        .to_path_buf();
     for name in ["context.md", "plan.md"] {
         let path = branch_dir.join(name);
         if !path.exists() {
@@ -1001,6 +1012,7 @@ mod tests {
             workspace_root: PathBuf::from("/tmp/ws"),
             group: None,
             shadowed_global_root: None,
+            routing: Routing::RepoLocal,
         };
         let t = resolve(Scope::Branch, &facts, &resolved).unwrap();
         assert_eq!(
@@ -1023,6 +1035,7 @@ mod tests {
             workspace_root: PathBuf::from("/tmp/ws"),
             group: None,
             shadowed_global_root: None,
+            routing: Routing::RepoLocal,
         };
         let t = resolve(Scope::Branch, &facts, &resolved).unwrap();
         assert_eq!(
@@ -1048,6 +1061,7 @@ mod tests {
             workspace_root: PathBuf::from("/tmp/ws"),
             group: None,
             shadowed_global_root: None,
+            routing: Routing::RepoLocal,
         };
         let err = resolve(Scope::Group, &facts, &resolved).unwrap_err();
         assert!(err.suggestion.is_some());
@@ -1072,6 +1086,7 @@ mod tests {
             workspace_root: tmp.path().to_path_buf(),
             group: None,
             shadowed_global_root: None,
+            routing: Routing::RepoLocal,
         };
 
         let variants = legacy_variants(&ws_facts("github.com/u/whisper"), &resolved);
@@ -1098,6 +1113,7 @@ mod tests {
             workspace_root: tmp.path().join(".whisper/private"),
             group: None,
             shadowed_global_root: None,
+            routing: Routing::RepoLocal,
         };
         // A legacy variant with content, so the pre-guard code would act.
         let variant = tmp.path().join(".whisper/private/repos/whisper/env.md");
@@ -1183,6 +1199,7 @@ mod tests {
             workspace_root: tmp.path().to_path_buf(),
             group: None,
             shadowed_global_root: None,
+            routing: Routing::RepoLocal,
         };
 
         let report = consolidate(&ws_facts("github.com/u/whisper"), &resolved).unwrap();
@@ -1214,6 +1231,7 @@ mod tests {
             workspace_root: tmp.path().to_path_buf(),
             group: None,
             shadowed_global_root: None,
+            routing: Routing::RepoLocal,
         };
 
         let report = consolidate(&ws_facts("github.com/u/whisper"), &resolved).unwrap();
@@ -1248,6 +1266,7 @@ mod tests {
             workspace_root: tmp.path().to_path_buf(),
             group: None,
             shadowed_global_root: None,
+            routing: Routing::RepoLocal,
         };
 
         consolidate(&ws_facts("github.com/u/whisper"), &resolved).unwrap();
@@ -1270,6 +1289,7 @@ mod tests {
             workspace_root: tmp.path().to_path_buf(),
             group: None,
             shadowed_global_root: None,
+            routing: Routing::RepoLocal,
         };
 
         let report = consolidate(&ws_facts("github.com/u/r"), &resolved).unwrap();
@@ -1294,6 +1314,7 @@ mod tests {
             workspace_root: tmp.path().to_path_buf(),
             group: None,
             shadowed_global_root: None,
+            routing: Routing::RepoLocal,
         };
         let t = resolve(Scope::Repo, &facts, &resolved).unwrap();
         // Decision A: repo knowledge lands in the checkout, not the store.
@@ -1320,6 +1341,7 @@ mod tests {
             workspace_root: tmp.path().to_path_buf(),
             group: None,
             shadowed_global_root: None,
+            routing: Routing::RepoLocal,
         };
 
         init(&facts, &resolved).unwrap();

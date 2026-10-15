@@ -1,0 +1,9 @@
+id = "the-private-zone-override-composes-over-the-declared-mode"
+description = ""
+archetype = "PF"
+status = "active"
+superseded_by = ""
+authored_with = "0.11.0"
+
+[[tests.cargo]]
+flags = "routing_mode_machine_local_still_honors_the_zone"

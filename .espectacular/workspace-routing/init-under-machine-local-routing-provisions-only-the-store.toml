@@ -1,0 +1,9 @@
+id = "init-under-machine-local-routing-provisions-only-the-store"
+description = ""
+archetype = "PF"
+status = "active"
+superseded_by = ""
+authored_with = "0.11.0"
+
+[[tests.cargo]]
+flags = "init_under_machine_local_provisions_only_the_store_layer"

@@ -10,7 +10,7 @@ use std::path::Path;
 
 use genesis::doctor::{CheckEntry, DoctorReport};
 
-use crate::config::Resolved;
+use crate::config::{Resolved, Routing};
 use crate::skill_pack;
 use crate::workspace::{
     Facts, PrivateZoneState, Scope, agents_file, legacy_variants, private_zone_state, resolve,
@@ -28,6 +28,7 @@ const MANAGED_SKILLS: &str = "turu.managed-skills";
 const ENTRY_FORMAT: &str = "turu.entry-format";
 const DISTILL_PENDING: &str = "turu.distill-pending";
 const USAGE_STALENESS: &str = "turu.usage-staleness";
+const ROUTING: &str = "turu.routing";
 const PRIVATE_IGNORE: &str = "turu.private-ignore";
 const PRIVATE_TRACKED: &str = "turu.private-tracked";
 const PRIVATE_LEAKS: &str = "turu.private-leaks";
@@ -336,6 +337,11 @@ pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> Docto
         )
     });
 
+    // Declarative routing mode (gh-3): report the effective route per
+    // scope and flag stale checkout-layer content under machine-local
+    // routing — the mode switch is a config edit, leftovers are not.
+    checks.push(routing_check(facts, resolved));
+
     // Private-zone integrity (add-repo-private-scope 3.2): the checkout
     // self-protects and self-reports. Gitignore is the backstop, turu is
     // the guarantee — doctor owns the hard guarantee.
@@ -471,6 +477,68 @@ pub fn run_checks(facts: &Facts, resolved: &Resolved, repo_root: &Path) -> Docto
     checks.push(pack_check);
 
     DoctorReport::new("turu", checks)
+}
+
+/// Doctor's routing-mode check (gh-3): the declared mode and effective
+/// repo/branch route; a stale checkout layer warns under machine-local.
+fn routing_check(facts: &Facts, resolved: &Resolved) -> CheckEntry {
+    const DESC: &str = "routing mode is declared and honored";
+    let store_route = format!(
+        "repo/branch → machine-local store ({})",
+        resolved
+            .knowledge_root()
+            .join("repos")
+            .join(&facts.repo_key)
+            .display()
+    );
+    match resolved.routing {
+        Routing::RepoLocal => CheckEntry::pass(
+            ROUTING,
+            DESC,
+            "repo/branch → <checkout>/.whisper/ (decision A)",
+        ),
+        Routing::MachineLocal => {
+            let stale = stale_checkout_layer(facts);
+            if stale.is_empty() {
+                CheckEntry::pass(ROUTING, DESC, store_route)
+            } else {
+                with_fix(
+                    CheckEntry::warn(
+                        ROUTING,
+                        DESC,
+                        format!(
+                            "machine-local routing is active but the checkout layer still carries content: [{}] — recall composes it, but new writes go to the store",
+                            stale.join(", ")
+                        ),
+                    ),
+                    "migrate the content (turu bundle pack repo → unpack outside the checkout) or delete the checkout slot files",
+                )
+            }
+        }
+    }
+}
+
+/// Checkout-layer slot files that still carry content under machine-local
+/// routing — leftovers from the previous mode that would silently diverge.
+fn stale_checkout_layer(facts: &Facts) -> Vec<String> {
+    facts
+        .repo_local_root
+        .iter()
+        .flat_map(|root| {
+            [
+                root.join("env.md"),
+                root.join("branches")
+                    .join(&facts.branch_slug)
+                    .join("notes.md"),
+            ]
+        })
+        .filter(|p| {
+            std::fs::read_to_string(p)
+                .map(|c| !c.trim().is_empty())
+                .unwrap_or(false)
+        })
+        .map(|p| format!("`{}`", p.display()))
+        .collect()
 }
 
 fn with_fix(mut entry: CheckEntry, fix: &str) -> CheckEntry {

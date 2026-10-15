@@ -1134,7 +1134,7 @@ fn doctor_reports_unhealthy_then_healthy_after_sync() {
         .args(["doctor", "--json"])
         .assert()
         .success()
-        .stdout(contains("\"pass\":12"))
+        .stdout(contains("\"pass\":13"))
         .stdout(contains("\"warn\":0"));
 }
 
@@ -1681,4 +1681,173 @@ fn check_flags_legacy_variants() {
         .success()
         .stdout(contains("legacy repo-key variants"))
         .stdout(contains("github.com/u/r"));
+}
+
+// ---------------------------------------------------------------------------
+// add-routing-mode (whisper-rk9 / gh-3): declarative per-repo routing mode
+// ---------------------------------------------------------------------------
+
+#[test]
+fn routing_mode_machine_local_routes_the_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "https://github.com/u/r.git");
+    std::fs::create_dir_all(repo.join(".whisper")).unwrap();
+    std::fs::write(
+        repo.join(".whisper/config.toml"),
+        "routing = \"machine-local\"\n",
+    )
+    .unwrap();
+
+    // repo/branch resolve to the machine-local store by default — the
+    // persistent equivalent of the --global escape hatch.
+    turu(tmp.path(), &repo)
+        .args(["resolve", "repo", "--json"])
+        .assert()
+        .success()
+        .stdout(contains(".whisper/repos/github.com/u/r/env.md"))
+        .stdout(contains("\"exists\":false"));
+
+    turu(tmp.path(), &repo)
+        .args(["append", "branch", "store by default"])
+        .assert()
+        .success();
+    assert!(
+        tmp.path()
+            .join(".whisper/repos/github.com/u/r/branches/main/notes.md")
+            .exists(),
+        "branch write lands in the machine-local store"
+    );
+    assert!(
+        !repo.join(".whisper/branches/main/notes.md").exists(),
+        "checkout layer stays untouched under machine-local routing"
+    );
+}
+
+#[test]
+fn routing_mode_repo_local_is_the_default() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "https://github.com/u/r.git");
+    std::fs::create_dir_all(repo.join(".whisper")).unwrap();
+
+    // No routing key → decision-A behavior: repo/branch in the checkout.
+    turu(tmp.path(), &repo)
+        .args(["resolve", "repo", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("repo/.whisper/env.md"));
+}
+
+#[test]
+fn routing_mode_rejects_unknown_values() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "https://github.com/u/r.git");
+    std::fs::create_dir_all(repo.join(".whisper")).unwrap();
+    std::fs::write(repo.join(".whisper/config.toml"), "routing = \"cloud\"\n").unwrap();
+
+    turu(tmp.path(), &repo)
+        .args(["resolve", "repo", "--json"])
+        .assert()
+        .failure()
+        .stderr(contains("unknown routing mode 'cloud'"));
+}
+
+#[test]
+fn routing_mode_machine_local_still_honors_the_zone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "https://github.com/u/r.git");
+    std::fs::create_dir_all(repo.join(".whisper")).unwrap();
+    std::fs::write(
+        repo.join(".whisper/config.toml"),
+        "routing = \"machine-local\"\n",
+    )
+    .unwrap();
+
+    // The --private zone is an explicit override and stays checkout-local.
+    turu(tmp.path(), &repo)
+        .args(["append", "branch", "--private", "private fact"])
+        .assert()
+        .success();
+    assert!(
+        repo.join(".whisper/private/branches/main/notes.md")
+            .exists()
+    );
+}
+
+#[test]
+fn init_under_machine_local_provisions_only_the_store_layer() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "https://github.com/u/r.git");
+    std::fs::create_dir_all(repo.join(".whisper")).unwrap();
+    std::fs::write(
+        repo.join(".whisper/config.toml"),
+        "routing = \"machine-local\"\n",
+    )
+    .unwrap();
+
+    turu(tmp.path(), &repo)
+        .args(["init", "--json"])
+        .assert()
+        .success()
+        .stdout(contains(".whisper/repos/github.com/u/r/env.md"));
+
+    assert!(
+        tmp.path()
+            .join(".whisper/repos/github.com/u/r/env.md")
+            .exists(),
+        "store layer provisioned"
+    );
+    assert!(
+        !repo.join(".whisper/env.md").exists(),
+        "no checkout repo slot under machine-local routing"
+    );
+    assert!(
+        !repo.join(".whisper/branches/main/notes.md").exists(),
+        "no checkout branch slot under machine-local routing"
+    );
+}
+
+#[test]
+fn doctor_reports_routing_mode_and_flags_stale_checkout_layer() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    git_repo(&repo, "https://github.com/u/r.git");
+    std::fs::create_dir_all(repo.join(".whisper")).unwrap();
+    std::fs::write(
+        repo.join(".whisper/config.toml"),
+        "routing = \"machine-local\"\n",
+    )
+    .unwrap();
+    // Baseline a healthy workspace first (init provisions the store layer
+    // under this mode; sync wires the managed block + ignore rule).
+    turu(tmp.path(), &repo).args(["init"]).assert().success();
+    turu(tmp.path(), &repo).args(["sync"]).assert().success();
+
+    // Clean switch: no checkout layer content → pass, store route reported.
+    turu(tmp.path(), &repo)
+        .args(["doctor", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("turu.routing"))
+        .stdout(contains("machine-local store"))
+        .stdout(contains("\"warn\":0"));
+
+    // Leftover checkout-layer content → advisory warn naming the files.
+    std::fs::write(
+        repo.join(".whisper/env.md"),
+        "leftover from the previous mode\n",
+    )
+    .unwrap();
+
+    turu(tmp.path(), &repo)
+        .args(["doctor", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("turu.routing"))
+        .stdout(contains("checkout layer still carries content"))
+        .stdout(contains("\"warn\":1"));
 }

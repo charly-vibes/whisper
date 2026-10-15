@@ -216,6 +216,7 @@ pub fn read_input(file: Option<&str>, stdin: bool) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Routing;
     use std::path::PathBuf;
 
     #[test]
@@ -272,6 +273,7 @@ mod tests {
             workspace_root: root.to_path_buf(),
             group: None,
             shadowed_global_root: None,
+            routing: Routing::RepoLocal,
         }
     }
 
@@ -305,6 +307,7 @@ mod tests {
             workspace_root: tmp.path().join("ws"),
             group: Some(("rogue".into(), tmp.path().join(".whisper/private"))),
             shadowed_global_root: None,
+            routing: Routing::RepoLocal,
         };
 
         let err = pack(Scope::Group, &facts, &resolved, Some(out.to_str().unwrap())).unwrap_err();
@@ -323,6 +326,7 @@ mod tests {
             workspace_root: tmp.path().join("ws"),
             group: Some(("rogue".into(), tmp.path().join(".whisper/private"))),
             shadowed_global_root: None,
+            routing: Routing::RepoLocal,
         };
         let bundle = Bundle {
             repo_key: "cv/charly-vibes/whisper".into(),

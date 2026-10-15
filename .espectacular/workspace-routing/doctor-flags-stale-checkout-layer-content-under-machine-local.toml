@@ -1,0 +1,9 @@
+id = "doctor-flags-stale-checkout-layer-content-under-machine-local"
+description = ""
+archetype = "PF"
+status = "active"
+superseded_by = ""
+authored_with = "0.11.0"
+
+[[tests.cargo]]
+flags = "doctor_reports_routing_mode_and_flags_stale_checkout_layer"

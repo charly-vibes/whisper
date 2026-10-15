@@ -1,0 +1,9 @@
+id = "repo-local-remains-the-default-without-a-routing-key"
+description = ""
+archetype = "PF"
+status = "active"
+superseded_by = ""
+authored_with = "0.11.0"
+
+[[tests.cargo]]
+flags = "routing_mode_repo_local_is_the_default"

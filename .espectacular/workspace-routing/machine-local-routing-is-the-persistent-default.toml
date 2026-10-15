@@ -1,0 +1,9 @@
+id = "machine-local-routing-is-the-persistent-default"
+description = ""
+archetype = "PF"
+status = "active"
+superseded_by = ""
+authored_with = "0.11.0"
+
+[[tests.cargo]]
+flags = "routing_mode_machine_local_routes_the_store"

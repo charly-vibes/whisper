@@ -46,6 +46,42 @@ pub struct RepoConfig {
     /// Private workspace-root override for this checkout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_root: Option<String>,
+    /// Declarative routing mode for the repo/branch scopes (gh-3):
+    /// `repo-local` (decision-A default — knowledge travels with the
+    /// checkout's git) or `machine-local` (the persistent equivalent of
+    /// the `--global` escape hatch — knowledge lands in the machine-local
+    /// store and the checkout stays clean).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<String>,
+}
+
+/// Declarative routing mode for the repo/branch scopes.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum Routing {
+    /// Repo/branch knowledge lands in the checkout's committed `.whisper/`
+    /// zone (decision A default).
+    #[default]
+    RepoLocal,
+    /// Repo/branch knowledge lands in the machine-local store — the
+    /// persistent `--global` default (gh-3: no per-invocation flag needed).
+    MachineLocal,
+}
+
+impl Routing {
+    /// Parse a routing-mode config value, erroring with the valid values
+    /// on anything else.
+    pub fn parse_value(raw: &str) -> Result<Routing> {
+        match raw {
+            "repo-local" => Ok(Routing::RepoLocal),
+            "machine-local" => Ok(Routing::MachineLocal),
+            other => Err(WhisperError::new(format!(
+                "unknown routing mode '{other}' in .whisper/config.toml"
+            ))
+            .with_suggestion(
+                "set routing to 'repo-local' (checkout-committed, default) or 'machine-local' (machine-local store)",
+            )),
+        }
+    }
 }
 
 /// Fully resolved destinations after applying precedence.
@@ -60,6 +96,8 @@ pub struct Resolved {
     /// `workspace_root`. That override also relocates the global scope
     /// (`rules.md`), so doctor compares it against the shadowed location.
     pub shadowed_global_root: Option<PathBuf>,
+    /// Declarative routing mode for the repo/branch scopes (gh-3).
+    pub routing: Routing,
 }
 
 impl Resolved {
@@ -140,6 +178,17 @@ pub fn load(cwd: &Path, repo_key: &str) -> Result<Resolved> {
         None => (None, None),
     };
 
+    // Declarative routing mode (gh-3): validated eagerly so a typo in
+    // `.whisper/config.toml` fails the invocation with a suggestion
+    // instead of silently falling back to the default mode.
+    let routing = match &repo_cfg {
+        Some(cfg) => match &cfg.routing {
+            Some(raw) => Routing::parse_value(raw)?,
+            None => Routing::RepoLocal,
+        },
+        None => Routing::RepoLocal,
+    };
+
     // Group resolution order: repo config's explicit `group`, then global
     // membership lists. Group root beats the global workspace root for
     // repo/branch/worktree scopes; a repo private `workspace_root` beats
@@ -186,6 +235,7 @@ pub fn load(cwd: &Path, repo_key: &str) -> Result<Resolved> {
             workspace_root: anchored,
             group,
             shadowed_global_root: Some(default_root),
+            routing,
         });
     }
 
@@ -193,6 +243,7 @@ pub fn load(cwd: &Path, repo_key: &str) -> Result<Resolved> {
         workspace_root: default_root,
         group,
         shadowed_global_root: None,
+        routing,
     })
 }
 
