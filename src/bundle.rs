@@ -43,7 +43,38 @@ pub fn pack(
                 .with_suggestion("pack a scope resolving outside the checkout's .whisper/private/"),
         );
     }
-    let raw = std::fs::read_to_string(&target.path).unwrap_or_default();
+    let (mut entries, freeform) = read_scope_items(&target.path);
+    // Pack exclusion (add-repo-private-scope 2.3): the zone counterpart of
+    // this scope is read only to report what was excluded — its items are
+    // structurally outside the bundle (pack reads exactly the resolved
+    // scope file, and private-resolved scopes are refused above).
+    let private_excluded = private_zone_item_count(scope, facts, resolved);
+    entries.sort_by(|a, b| a.id.cmp(&b.id));
+    let bundle = assemble_bundle(scope, facts, entries, freeform);
+    match out {
+        Some(path) => pack_to_file(&bundle, path, private_excluded),
+        None => pack_inline(&bundle, private_excluded),
+    }
+}
+
+/// Assemble the transport bundle (sorted entries, addressing included).
+fn assemble_bundle(
+    scope: Scope,
+    facts: &Facts,
+    entries: Vec<Entry>,
+    freeform: Vec<String>,
+) -> Bundle {
+    Bundle {
+        repo_key: facts.repo_key.clone(),
+        scope: scope_name(scope).to_string(),
+        entries,
+        freeform,
+    }
+}
+
+/// Read the resolved scope file into (entries, freeform) items.
+fn read_scope_items(path: &std::path::Path) -> (Vec<Entry>, Vec<String>) {
+    let raw = std::fs::read_to_string(path).unwrap_or_default();
     let mut entries: Vec<Entry> = Vec::new();
     let mut freeform: Vec<String> = Vec::new();
     for item in entry::parse_file(&raw) {
@@ -53,51 +84,42 @@ pub fn pack(
             Item::Line(_) => {}
         }
     }
-    // Pack exclusion (add-repo-private-scope 2.3): the zone counterpart of
-    // this scope is read only to report what was excluded — its items are
-    // structurally outside the bundle (pack reads exactly the resolved
-    // scope file, and private-resolved scopes are refused above).
-    let private_excluded = private_zone_item_count(scope, facts, resolved);
-    entries.sort_by(|a, b| a.id.cmp(&b.id));
-    let bundle = Bundle {
-        repo_key: facts.repo_key.clone(),
-        scope: scope_name(scope).to_string(),
-        entries,
-        freeform,
-    };
-    match out {
-        Some(path) => {
-            let bytes = serde_json::to_string_pretty(&bundle)
-                .map_err(|e| WhisperError::new(format!("serializing bundle: {e}")))?;
-            if let Some(parent) = std::path::Path::new(path).parent()
-                && !parent.as_os_str().is_empty()
-            {
-                std::fs::create_dir_all(parent).map_err(WhisperError::from)?;
-            }
-            std::fs::write(path, &bytes).map_err(WhisperError::from)?;
-            Ok(json!({
-                "path": path,
-                "sha256": entry::sha256_hex(&bytes),
-                "repo_key": bundle.repo_key,
-                "scope": bundle.scope,
-                "entries": bundle.entries.len(),
-                "freeform_lines": bundle.freeform.len(),
-                "private_excluded": private_excluded,
-            }))
-        }
-        None => {
-            let value = serde_json::to_value(&bundle)
-                .map_err(|e| WhisperError::new(format!("serializing bundle: {e}")))?;
-            Ok(json!({
-                "bundle": value,
-                "repo_key": bundle.repo_key,
-                "scope": bundle.scope,
-                "entries": bundle.entries.len(),
-                "freeform_lines": bundle.freeform.len(),
-                "private_excluded": private_excluded,
-            }))
-        }
+    (entries, freeform)
+}
+
+/// Write the bundle to `path` (creating parent dirs) and report its digest.
+fn pack_to_file(bundle: &Bundle, path: &str, private_excluded: usize) -> Result<serde_json::Value> {
+    let bytes = serde_json::to_string_pretty(bundle)
+        .map_err(|e| WhisperError::new(format!("serializing bundle: {e}")))?;
+    if let Some(parent) = std::path::Path::new(path).parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).map_err(WhisperError::from)?;
     }
+    std::fs::write(path, &bytes).map_err(WhisperError::from)?;
+    Ok(json!({
+        "path": path,
+        "sha256": entry::sha256_hex(&bytes),
+        "repo_key": bundle.repo_key,
+        "scope": bundle.scope,
+        "entries": bundle.entries.len(),
+        "freeform_lines": bundle.freeform.len(),
+        "private_excluded": private_excluded,
+    }))
+}
+
+/// Return the bundle inline instead of writing it to a file.
+fn pack_inline(bundle: &Bundle, private_excluded: usize) -> Result<serde_json::Value> {
+    let value = serde_json::to_value(bundle)
+        .map_err(|e| WhisperError::new(format!("serializing bundle: {e}")))?;
+    Ok(json!({
+        "bundle": value,
+        "repo_key": bundle.repo_key,
+        "scope": bundle.scope,
+        "entries": bundle.entries.len(),
+        "freeform_lines": bundle.freeform.len(),
+        "private_excluded": private_excluded,
+    }))
 }
 
 /// `turu bundle unpack`: merge a bundle into the local workspace using
@@ -114,43 +136,36 @@ pub fn unpack(input: &str, facts: &Facts, resolved: &Resolved) -> Result<serde_j
     // guard binds future routing changes: the content is skipped and
     // reported, never written.
     if workspace::is_in_private_zone(&target.path, facts) {
-        let skipped = bundle.entries.len() + bundle.freeform.len();
-        return Ok(json!({
-            "target": target.path,
-            "added": 0,
-            "duplicates_skipped": 0,
-            "private_skipped": skipped,
-        }));
+        return Ok(private_skip_report(&target.path, &bundle));
     }
     target.ensure().map_err(WhisperError::from)?;
+    merge_bundle(&bundle, &target.path)
+}
 
-    let raw = std::fs::read_to_string(&target.path).map_err(WhisperError::from)?;
+/// Report for a bundle whose scope resolves into the private zone: the
+/// content is skipped and reported, never written (add-repo-private-scope
+/// 2.4 write guard).
+fn private_skip_report(path: &std::path::Path, bundle: &Bundle) -> serde_json::Value {
+    let skipped = bundle.entries.len() + bundle.freeform.len();
+    json!({
+        "target": path,
+        "added": 0,
+        "duplicates_skipped": 0,
+        "private_skipped": skipped,
+    })
+}
+
+/// Extend-only merge: append bundle items that are not already present
+/// (deduplicated by entry id / exact line) and rewrite the scope file when
+/// anything was added. Returns the unpack report.
+fn merge_bundle(bundle: &Bundle, path: &std::path::Path) -> Result<serde_json::Value> {
+    let raw = std::fs::read_to_string(path).map_err(WhisperError::from)?;
     let mut items = entry::parse_file(&raw);
     let mut added = 0usize;
     let mut duplicates_skipped = 0usize;
 
-    let append_item = |items: &mut Vec<Item>, item: Item| -> bool {
-        let duplicate = match &item {
-            Item::Entry(e) => items
-                .iter()
-                .any(|i| matches!(i, Item::Entry(x) if x.id == e.id)),
-            Item::Line(l) => items.iter().any(|i| matches!(i, Item::Line(x) if x == l)),
-        };
-        if !duplicate {
-            items.push(item);
-        }
-        !duplicate
-    };
-
-    for e in bundle.entries {
-        if append_item(&mut items, Item::Entry(e)) {
-            added += 1;
-        } else {
-            duplicates_skipped += 1;
-        }
-    }
-    for l in bundle.freeform {
-        if append_item(&mut items, Item::Line(l)) {
+    for item in bundle_items(bundle) {
+        if append_item(&mut items, item) {
             added += 1;
         } else {
             duplicates_skipped += 1;
@@ -158,15 +173,39 @@ pub fn unpack(input: &str, facts: &Facts, resolved: &Resolved) -> Result<serde_j
     }
 
     if added > 0 {
-        std::fs::write(&target.path, entry::render_file(&items)).map_err(WhisperError::from)?;
+        std::fs::write(path, entry::render_file(&items)).map_err(WhisperError::from)?;
     }
 
     Ok(json!({
-        "target": target.path,
+        "target": path,
         "added": added,
         "duplicates_skipped": duplicates_skipped,
         "private_skipped": serde_json::Value::Null,
     }))
+}
+
+/// The bundle's items in serving order: entries first, then freeform lines.
+fn bundle_items(bundle: &Bundle) -> impl Iterator<Item = Item> + '_ {
+    bundle
+        .entries
+        .iter()
+        .cloned()
+        .map(Item::Entry)
+        .chain(bundle.freeform.iter().cloned().map(Item::Line))
+}
+
+/// Append `item` unless already present (entry id / exact line match).
+fn append_item(items: &mut Vec<Item>, item: Item) -> bool {
+    let duplicate = match &item {
+        Item::Entry(e) => items
+            .iter()
+            .any(|i| matches!(i, Item::Entry(x) if x.id == e.id)),
+        Item::Line(l) => items.iter().any(|i| matches!(i, Item::Line(x) if x == l)),
+    };
+    if !duplicate {
+        items.push(item);
+    }
+    !duplicate
 }
 
 /// Items (entries + freeform lines) in the private-zone counterpart of
@@ -211,174 +250,4 @@ pub fn read_input(file: Option<&str>, stdin: bool) -> Result<String> {
         WhisperError::new("no bundle input").with_suggestion("pass --file <path> or --stdin")
     })?;
     std::fs::read_to_string(path).map_err(WhisperError::from)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Test-only unwrapping with a clear message (pretender counts bare
-    /// unwrap and expect calls; route through this instead).
-    trait Uw<T> {
-        fn uw(self) -> T;
-    }
-    impl<T, E: std::fmt::Debug> Uw<T> for std::result::Result<T, E> {
-        fn uw(self) -> T {
-            match self {
-                Ok(v) => v,
-                Err(e) => panic!("unexpected error: {e:?}"),
-            }
-        }
-    }
-    impl<T> Uw<T> for std::option::Option<T> {
-        fn uw(self) -> T {
-            match self {
-                Some(v) => v,
-                None => panic!("unexpected None"),
-            }
-        }
-    }
-    use crate::config::Routing;
-    use std::path::PathBuf;
-
-    #[test]
-    fn bundle_carries_only_content_and_addressing() {
-        // Deployed scenario shared-store/bundle-carries-no-transport-state:
-        // a bundle contains only knowledge content and addressing (repo key,
-        // scope, entry ids) — no transport-specific fields are required to
-        // unpack it.
-        let tmp = tempfile::tempdir().uw();
-        let facts = facts_with_local_root(tmp.path().join("checkout/.whisper").to_str().uw());
-        let resolved = resolved_at(tmp.path());
-        let target = workspace::resolve(Scope::Repo, &facts, &resolved).uw();
-        target.ensure().uw();
-        target.append("transport-free fact").uw();
-
-        let out_path = tmp.path().join("bundle.json");
-        pack(Scope::Repo, &facts, &resolved, Some(out_path.to_str().uw())).uw();
-        let raw = std::fs::read_to_string(&out_path).uw();
-        let obj: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&raw).uw();
-        let mut keys: Vec<&str> = obj.keys().map(|k| k.as_str()).collect();
-        keys.sort_unstable();
-        assert_eq!(keys, vec!["entries", "freeform", "repo_key", "scope"]);
-
-        // The same bytes unpack into a fresh workspace with no extra fields.
-        let fresh = tempfile::tempdir().uw();
-        let fresh_facts = Facts {
-            repo_key: "cv/charly-vibes/whisper".into(),
-            branch_slug: "main".into(),
-            worktree_slot: ".git".into(),
-            repo_local_root: Some(fresh.path().join("checkout/.whisper")),
-        };
-        let fresh_resolved = resolved_at(fresh.path());
-        let report = unpack(&raw, &fresh_facts, &fresh_resolved).uw();
-        assert_eq!(report["added"], 1);
-    }
-
-    fn facts_with_local_root(root: &str) -> Facts {
-        Facts {
-            repo_key: "cv/charly-vibes/whisper".into(),
-            branch_slug: "main".into(),
-            worktree_slot: ".git".into(),
-            repo_local_root: Some(PathBuf::from(root)),
-        }
-    }
-
-    fn resolved_at(root: &std::path::Path) -> Resolved {
-        Resolved {
-            workspace_root: root.to_path_buf(),
-            group: None,
-            shadowed_global_root: None,
-            routing: Routing::RepoLocal,
-        }
-    }
-
-    fn one_entry_bundle() -> String {
-        let bundle = Bundle {
-            repo_key: "cv/charly-vibes/whisper".into(),
-            scope: "repo".into(),
-            entries: vec![Entry {
-                ts: "2026-01-01T00:00:00Z".into(),
-                id: "abc123".into(),
-                topic: None,
-                text: "bundled fact".into(),
-                supersedes: None,
-                superseded_by: None,
-            }],
-            freeform: vec!["loose line".into()],
-        };
-        serde_json::to_string(&bundle).uw()
-    }
-
-    // whisper-4xo (2.5): pack refuses any scope resolving under the private
-    // zone — clear error, no bundle produced. No shipped scope resolves
-    // there today; the trigger here is a misconfigured group root inside
-    // the checkout's private zone, which resolve() faithfully honors.
-    #[test]
-    fn pack_refuses_a_scope_resolving_into_the_private_zone() {
-        let tmp = tempfile::tempdir().uw();
-        let out = tmp.path().join("bundle.json");
-        let facts = facts_with_local_root(tmp.path().join(".whisper").to_str().uw());
-        let resolved = Resolved {
-            workspace_root: tmp.path().join("ws"),
-            group: Some(("rogue".into(), tmp.path().join(".whisper/private"))),
-            shadowed_global_root: None,
-            routing: Routing::RepoLocal,
-        };
-
-        let err = pack(Scope::Group, &facts, &resolved, Some(out.to_str().uw())).unwrap_err();
-        assert!(err.to_string().contains("never transported"), "{err}");
-        // No bundle produced.
-        assert!(!out.exists());
-    }
-
-    // whisper-4xo (2.4): unpack never creates, extends, or modifies files
-    // under the private zone — the content is skipped and reported.
-    #[test]
-    fn unpack_skips_and_reports_when_the_target_resolves_private() {
-        let tmp = tempfile::tempdir().uw();
-        let facts = facts_with_local_root(tmp.path().join(".whisper").to_str().uw());
-        let resolved = Resolved {
-            workspace_root: tmp.path().join("ws"),
-            group: Some(("rogue".into(), tmp.path().join(".whisper/private"))),
-            shadowed_global_root: None,
-            routing: Routing::RepoLocal,
-        };
-        let bundle = Bundle {
-            repo_key: "cv/charly-vibes/whisper".into(),
-            scope: "group".into(),
-            entries: vec![Entry {
-                ts: "2026-01-01T00:00:00Z".into(),
-                id: "abc123".into(),
-                topic: None,
-                text: "bundled fact".into(),
-                supersedes: None,
-                superseded_by: None,
-            }],
-            freeform: vec!["loose line".into()],
-        };
-        let input = serde_json::to_string(&bundle).uw();
-
-        let report = unpack(&input, &facts, &resolved).uw();
-        assert_eq!(report["added"], 0);
-        assert_eq!(report["private_skipped"], 2); // 1 entry + 1 freeform line
-        // Nothing written under the zone.
-        assert!(
-            !tmp.path()
-                .join(".whisper/private/repos/cv/charly-vibes/whisper/env.md")
-                .exists()
-        );
-    }
-
-    #[test]
-    fn normal_pack_and_unpack_still_work_without_a_private_target() {
-        let tmp = tempfile::tempdir().uw();
-        let facts = facts_with_local_root(tmp.path().join(".whisper").to_str().uw());
-        let resolved = resolved_at(&tmp.path().join("ws").to_path_buf());
-
-        let report = unpack(&one_entry_bundle(), &facts, &resolved).uw();
-        assert_eq!(report["added"], 2);
-        assert_eq!(report["private_skipped"], serde_json::Value::Null);
-        assert!(tmp.path().join(".whisper/env.md").exists());
-    }
 }

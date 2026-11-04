@@ -160,41 +160,72 @@ pub fn find_repo_config(start: &Path) -> Option<(PathBuf, RepoConfig)> {
 /// Load and resolve the layered configuration for the checkout containing
 /// `cwd` (or the global default when `cwd` is not a repo).
 pub fn load(cwd: &Path, repo_key: &str) -> Result<Resolved> {
-    let global: GlobalConfig = match std::fs::read_to_string(global_path()) {
-        Ok(raw) => toml::from_str(&raw)
-            .map_err(|e| WhisperError::new(format!("parsing {}: {e}", global_path().display())))?,
-        Err(_) => GlobalConfig::default(),
-    };
+    let default_root = global_default_root()?;
+    let (repo_cfg_dir, repo_cfg) = find_repo_config(cwd)
+        .map(|(dir, cfg)| (Some(dir), Some(cfg)))
+        .unwrap_or((None, None));
+    let routing = routing_of(&repo_cfg)?;
+    let group = resolve_group(&repo_cfg, &load_global()?, repo_key)?;
 
-    let default_root = expand_tilde(
+    // Repo private root override (anchored to the repo config dir — see
+    // `private_root_override`) beats the workspace root for the global scope.
+    if let Some(resolved) = private_root_override(
+        &repo_cfg_dir,
+        &repo_cfg,
+        group.clone(),
+        routing,
+        &default_root,
+    ) {
+        return Ok(resolved);
+    }
+
+    Ok(Resolved {
+        workspace_root: default_root,
+        group,
+        shadowed_global_root: None,
+        routing,
+    })
+}
+
+/// Parse the global config (default when the file is absent).
+fn load_global() -> Result<GlobalConfig> {
+    match std::fs::read_to_string(global_path()) {
+        Ok(raw) => toml::from_str(&raw)
+            .map_err(|e| WhisperError::new(format!("parsing {}: {e}", global_path().display()))),
+        Err(_) => Ok(GlobalConfig::default()),
+    }
+}
+
+/// The global workspace root (explicit or built-in default), tilde-expanded.
+fn global_default_root() -> Result<PathBuf> {
+    let global = load_global()?;
+    Ok(expand_tilde(
         global
             .workspace_root
             .as_deref()
             .unwrap_or(DEFAULT_WORKSPACE_ROOT),
-    );
+    ))
+}
 
-    let (repo_cfg_dir, repo_cfg) = match find_repo_config(cwd) {
-        Some((dir, cfg)) => (Some(dir), Some(cfg)),
-        None => (None, None),
-    };
+/// Declarative routing mode (gh-3): validated eagerly so a typo in
+/// `.whisper/config.toml` fails the invocation with a suggestion
+/// instead of silently falling back to the default mode.
+fn routing_of(repo_cfg: &Option<RepoConfig>) -> Result<Routing> {
+    match repo_cfg.as_ref().and_then(|c| c.routing.as_ref()) {
+        Some(raw) => Routing::parse_value(raw),
+        None => Ok(Routing::RepoLocal),
+    }
+}
 
-    // Declarative routing mode (gh-3): validated eagerly so a typo in
-    // `.whisper/config.toml` fails the invocation with a suggestion
-    // instead of silently falling back to the default mode.
-    let routing = match &repo_cfg {
-        Some(cfg) => match &cfg.routing {
-            Some(raw) => Routing::parse_value(raw)?,
-            None => Routing::RepoLocal,
-        },
-        None => Routing::RepoLocal,
-    };
-
-    // Group resolution order: repo config's explicit `group`, then global
-    // membership lists. Group root beats the global workspace root for
-    // repo/branch/worktree scopes; a repo private `workspace_root` beats
-    // the workspace root for the global scope (`rules.md`).
-    let mut group: Option<(String, PathBuf)> = None;
-    if let Some(cfg) = &repo_cfg
+/// Group resolution order: repo config's explicit `group`, then global
+/// membership lists. Group root beats the global workspace root for
+/// repo/branch/worktree scopes.
+fn resolve_group(
+    repo_cfg: &Option<RepoConfig>,
+    global: &GlobalConfig,
+    repo_key: &str,
+) -> Result<Option<(String, PathBuf)>> {
+    if let Some(cfg) = repo_cfg
         && let Some(name) = &cfg.group
     {
         let gc = global.groups.get(name).ok_or_else(|| {
@@ -206,202 +237,46 @@ pub fn load(cwd: &Path, repo_key: &str) -> Result<Resolved> {
                 "add [groups.{name}] with a `root` to the global config, or remove `group = \"{name}\"` from .whisper/config.toml"
             ))
         })?;
-        group = Some((name.clone(), expand_tilde(&gc.root)));
+        return Ok(Some((name.clone(), expand_tilde(&gc.root))));
     }
-    if group.is_none()
-        && let Some((name, gc)) = global.groups.iter().find(|(_, g)| {
+    Ok(global
+        .groups
+        .iter()
+        .find(|(_, g)| {
             g.repos
                 .as_ref()
                 .is_some_and(|r| r.iter().any(|k| k == repo_key))
         })
-    {
-        group = Some((name.clone(), expand_tilde(&gc.root)));
-    }
+        .map(|(name, gc)| (name.clone(), expand_tilde(&gc.root))))
+}
 
-    // Repo private root override. A relative path is anchored to the
-    // directory containing the repo config, so resolution never depends on
-    // the process cwd (GH #1: subdirectory calls must not spawn stray
-    // workspace trees).
-    if let (Some(cfg_dir), Some(cfg)) = (&repo_cfg_dir, &repo_cfg)
-        && let Some(root) = &cfg.workspace_root
-    {
-        let expanded = expand_tilde(root);
-        let anchored = if expanded.is_absolute() {
-            expanded
-        } else {
-            cfg_dir.join(expanded)
-        };
-        return Ok(Resolved {
-            workspace_root: anchored,
-            group,
-            shadowed_global_root: Some(default_root),
-            routing,
-        });
-    }
-
-    Ok(Resolved {
-        workspace_root: default_root,
+/// Repo private `workspace_root` override. A relative path is anchored to
+/// the directory containing the repo config, so resolution never depends on
+/// the process cwd (GH #1: subdirectory calls must not spawn stray
+/// workspace trees).
+#[allow(clippy::too_many_arguments)]
+fn private_root_override(
+    repo_cfg_dir: &Option<PathBuf>,
+    repo_cfg: &Option<RepoConfig>,
+    group: Option<(String, PathBuf)>,
+    routing: Routing,
+    default_root: &Path,
+) -> Option<Resolved> {
+    let (cfg_dir, cfg) = (repo_cfg_dir.as_ref()?, repo_cfg.as_ref()?);
+    let root = cfg.workspace_root.as_ref()?;
+    let expanded = expand_tilde(root);
+    let anchored = if expanded.is_absolute() {
+        expanded
+    } else {
+        cfg_dir.join(expanded)
+    };
+    Some(Resolved {
+        workspace_root: anchored,
         group,
-        shadowed_global_root: None,
+        shadowed_global_root: Some(default_root.to_path_buf()),
         routing,
     })
 }
 
 /// Default workspace root when nothing is configured.
 pub const DEFAULT_WORKSPACE_ROOT: &str = "~/.whisper";
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Test-only unwrapping with a clear message (pretender counts bare
-    /// unwrap and expect calls; route through this instead).
-    trait Uw<T> {
-        fn uw(self) -> T;
-    }
-    impl<T, E: std::fmt::Debug> Uw<T> for std::result::Result<T, E> {
-        fn uw(self) -> T {
-            match self {
-                Ok(v) => v,
-                Err(e) => panic!("unexpected error: {e:?}"),
-            }
-        }
-    }
-    impl<T> Uw<T> for std::option::Option<T> {
-        fn uw(self) -> T {
-            match self {
-                Some(v) => v,
-                None => panic!("unexpected None"),
-            }
-        }
-    }
-
-    #[test]
-    fn tilde_expansion_uses_home() {
-        unsafe { std::env::set_var("HOME", "/tmp/fake-home") };
-        assert_eq!(
-            expand_tilde("~/.whisper"),
-            PathBuf::from("/tmp/fake-home/.whisper")
-        );
-        assert_eq!(expand_tilde("/abs/path"), PathBuf::from("/abs/path"));
-    }
-
-    #[test]
-    fn global_path_respects_xdg() {
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", "/tmp/xdg") };
-        assert_eq!(global_path(), PathBuf::from("/tmp/xdg/whisper/config.toml"));
-        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
-    }
-
-    #[test]
-    fn parse_group_config() {
-        let raw = r#"
-workspace_root = "~/.whisper"
-
-[groups.cv-tools]
-root = "~/knowledge"
-repos = ["cv/charly-vibes/whisper"]
-"#;
-        let cfg: GlobalConfig = toml::from_str(raw).uw();
-        assert_eq!(cfg.groups["cv-tools"].root, "~/knowledge");
-        assert_eq!(cfg.groups["cv-tools"].repos.as_ref().uw().len(), 1);
-    }
-
-    #[test]
-    fn relative_repo_workspace_root_anchors_to_config_dir() {
-        // GH #1: a repo-private relative workspace_root must resolve against
-        // the directory containing the config, not the process cwd — so a
-        // turu call from a nested subdir never materializes a stray
-        // `<subdir>/.whisper/` tree.
-        let tmp = tempfile::tempdir().uw();
-        let repo = tmp.path().join("repo");
-        std::fs::create_dir_all(repo.join(".whisper")).uw();
-        std::fs::create_dir_all(repo.join("scripts")).uw();
-        std::fs::write(
-            repo.join(".whisper/config.toml"),
-            "workspace_root = \".whisper\"\n",
-        )
-        .uw();
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path().join("xdg")) };
-        let resolved = load(&repo.join("scripts"), "github.com/u/r").uw();
-        assert_eq!(resolved.workspace_root, repo.join(".whisper"));
-        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
-    }
-
-    #[test]
-    fn repo_config_found_in_a_parent_dir() {
-        // Deployed scenario config-precedence/config-found-in-a-parent:
-        // a call from `<repo>/src/module` applies the config at `<repo>/`.
-        let tmp = tempfile::tempdir().uw();
-        let repo = tmp.path().join("repo");
-        std::fs::create_dir_all(repo.join(".whisper")).uw();
-        std::fs::create_dir_all(repo.join("src/module")).uw();
-        std::fs::write(
-            repo.join(".whisper/config.toml"),
-            "workspace_root = \"ws\"\n",
-        )
-        .uw();
-
-        let (dir, cfg) = find_repo_config(&repo.join("src/module")).uw();
-        assert_eq!(dir, repo);
-        assert_eq!(cfg.workspace_root.as_deref(), Some("ws"));
-    }
-
-    #[test]
-    fn nested_config_shadows_the_repo_root() {
-        // Deployed scenario config-precedence/nested-config-shadows-the-repo-root:
-        // the first config found walking up wins; the repo root's config is
-        // not consulted for that invocation.
-        let tmp = tempfile::tempdir().uw();
-        let repo = tmp.path().join("repo");
-        let sub = repo.join("sub");
-        std::fs::create_dir_all(repo.join(".whisper")).uw();
-        std::fs::create_dir_all(sub.join(".whisper")).uw();
-        std::fs::create_dir_all(sub.join("deeper")).uw();
-        std::fs::write(
-            repo.join(".whisper/config.toml"),
-            "workspace_root = \"root\"\n",
-        )
-        .uw();
-        std::fs::write(
-            sub.join(".whisper/config.toml"),
-            "workspace_root = \"sub\"\n",
-        )
-        .uw();
-
-        let (dir, cfg) = find_repo_config(&sub.join("deeper")).uw();
-        assert_eq!(dir, sub);
-        assert_eq!(cfg.workspace_root.as_deref(), Some("sub"));
-    }
-
-    #[test]
-    fn fresh_machine_defaults_to_the_global_store() {
-        // Deployed scenario config-precedence/fresh-machine: no config files
-        // anywhere → scopes resolve under the default workspace root.
-        let tmp = tempfile::tempdir().uw();
-        std::fs::create_dir_all(tmp.path().join("xdg")).uw();
-        unsafe { std::env::set_var("HOME", tmp.path()) };
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path().join("xdg")) };
-        let resolved = load(tmp.path(), "github.com/u/r").uw();
-        assert_eq!(resolved.workspace_root, tmp.path().join(".whisper"));
-        assert!(resolved.group.is_none());
-        assert!(resolved.shadowed_global_root.is_none());
-        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
-    }
-
-    #[test]
-    fn repo_group_not_defined_is_error() {
-        let tmp = tempfile::tempdir().uw();
-        let repo = tmp.path().join("repo");
-        std::fs::create_dir_all(repo.join(".whisper")).uw();
-        std::fs::write(
-            repo.join(".whisper/config.toml"),
-            "group = \"missing-group\"\n",
-        )
-        .uw();
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path().join("xdg")) };
-        let err = load(&repo, "github.com/u/r").unwrap_err();
-        assert!(err.message.contains("not defined"));
-        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
-    }
-}

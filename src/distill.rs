@@ -46,9 +46,29 @@ pub fn begin(target: &Target, ts: &str) -> Result<Revision> {
     }
     let raw = std::fs::read_to_string(&target.path).map_err(WhisperError::from)?;
     let sha = entry::sha256_hex(&raw);
-    let compact_ts = ts.replace([':', '-'], "");
-    let id = format!("{compact_ts}-{}", &sha[..8]);
-    let rev_dir = target.path.parent().unwrap().join("revisions").join(&id);
+    let id = format!("{}-{}", ts.replace([':', '-'], ""), &sha[..8]);
+    let rev_dir = revision_dir(target, &id)?;
+    let snapshot_path = rev_dir.join("snapshot.md");
+    let working_path = rev_dir.join("working.md");
+    fs::write(&snapshot_path, &raw).map_err(WhisperError::from)?;
+    write_revision_meta(&rev_dir, &id, target, &sha, &snapshot_path, &working_path)?;
+    // Recency signal for the rewrite pass (empty map → omitted).
+    let items = entry::parse_file(&raw);
+    let recency = crate::usage::recency_for(&items, &target.path);
+    let recency = (!recency.is_empty()).then_some(recency);
+    Ok(Revision {
+        id,
+        snapshot_path,
+        working_path,
+        target_path: target.path.clone(),
+        sha256: sha,
+        recency,
+    })
+}
+
+/// Create (or refuse to re-create) the immutable revision directory.
+fn revision_dir(target: &Target, id: &str) -> Result<std::path::PathBuf> {
+    let rev_dir = target.path.parent().unwrap().join("revisions").join(id);
     if rev_dir.exists() {
         return Err(
             WhisperError::new(format!("revision already exists: {}", rev_dir.display()))
@@ -58,20 +78,19 @@ pub fn begin(target: &Target, ts: &str) -> Result<Revision> {
         );
     }
     fs::create_dir_all(&rev_dir).map_err(WhisperError::from)?;
-    let snapshot_path = rev_dir.join("snapshot.md");
-    let working_path = rev_dir.join("working.md");
-    fs::write(&snapshot_path, &raw).map_err(WhisperError::from)?;
-    // Recency signal for the rewrite pass: usage stats for the entries in
-    // this snapshot (empty map when the sidecar is absent → omitted).
-    let items = entry::parse_file(&raw);
-    let recency_map = crate::usage::recency_for(&items, &target.path);
-    let recency = if recency_map.is_empty() {
-        None
-    } else {
-        Some(recency_map)
-    };
-    // The agent rewrites `working.md`; commit verifies the live file did not
-    // drift since this snapshot.
+    Ok(rev_dir)
+}
+
+/// Write meta.json: the agent rewrites `working.md`; commit verifies the
+/// live file did not drift since this snapshot.
+fn write_revision_meta(
+    rev_dir: &std::path::Path,
+    id: &str,
+    target: &Target,
+    sha: &str,
+    snapshot_path: &std::path::Path,
+    working_path: &std::path::Path,
+) -> Result<()> {
     fs::write(
         rev_dir.join("meta.json"),
         json!({
@@ -83,15 +102,7 @@ pub fn begin(target: &Target, ts: &str) -> Result<Revision> {
         })
         .to_string(),
     )
-    .map_err(WhisperError::from)?;
-    Ok(Revision {
-        id,
-        snapshot_path,
-        working_path,
-        target_path: target.path.clone(),
-        sha256: sha,
-        recency,
-    })
+    .map_err(WhisperError::from)
 }
 
 fn load_meta(
@@ -126,6 +137,33 @@ fn load_meta(
 /// `turu distill <scope> --commit --revision <id>`: install the distilled
 /// output only if the live files are unchanged since `--begin`.
 pub fn commit(target: &Target, revision: &str) -> Result<CommitReport> {
+    let rev_dir = revision_dir_for_commit(target, revision)?;
+    let (id, begin_sha, working_path, snapshot_path) = load_meta(&rev_dir)?;
+    let committed_marker = rev_dir.join(".committed");
+    let live = fs::read_to_string(&target.path).map_err(WhisperError::from)?;
+
+    if let Some(report) = replay_report(
+        &committed_marker,
+        &live,
+        target,
+        id.clone(),
+        snapshot_path.clone(),
+    )? {
+        return Ok(report);
+    }
+    check_drift(&live, &begin_sha)?;
+    install(target, &working_path, &committed_marker)?;
+
+    Ok(CommitReport {
+        revision: id,
+        replaced: target.path.clone(),
+        snapshot_path,
+        noop: false,
+    })
+}
+
+/// Resolve + validate the revision directory for a commit.
+fn revision_dir_for_commit(target: &Target, revision: &str) -> Result<std::path::PathBuf> {
     if !valid_revision_id(revision) {
         return Err(WhisperError::new(format!(
             "invalid revision id: {revision}"
@@ -147,32 +185,43 @@ pub fn commit(target: &Target, revision: &str) -> Result<CommitReport> {
             ),
         );
     }
-    let (id, begin_sha, working_path, snapshot_path) = load_meta(&rev_dir)?;
-    let committed_marker = rev_dir.join(".committed");
+    Ok(rev_dir)
+}
 
-    if committed_marker.exists() {
-        let committed_sha = fs::read_to_string(&committed_marker)
-            .map_err(WhisperError::from)?
-            .trim()
-            .to_string();
-        let live = fs::read_to_string(&target.path).map_err(WhisperError::from)?;
-        if entry::sha256_hex(&live) == committed_sha {
-            return Ok(CommitReport {
-                revision: id,
-                replaced: target.path.clone(),
-                snapshot_path,
-                noop: true,
-            });
-        }
-        return Err(WhisperError::new(format!(
-            "revision {revision} is already committed and the target drifted since"
-        ))
-        .with_suggestion("run a new `turu distill <scope> --begin` cycle"));
+/// Replay: a committed revision with an undrifted target is a no-op; a
+/// committed revision with drift is refused (immutability).
+#[allow(clippy::type_complexity)]
+fn replay_report(
+    committed_marker: &std::path::Path,
+    live: &str,
+    target: &Target,
+    id: String,
+    snapshot_path: std::path::PathBuf,
+) -> Result<Option<CommitReport>> {
+    if !committed_marker.exists() {
+        return Ok(None);
     }
+    let committed_sha = fs::read_to_string(committed_marker)
+        .map_err(WhisperError::from)?
+        .trim()
+        .to_string();
+    if entry::sha256_hex(live) == committed_sha {
+        return Ok(Some(CommitReport {
+            revision: id,
+            replaced: target.path.clone(),
+            snapshot_path,
+            noop: true,
+        }));
+    }
+    Err(
+        WhisperError::new("revision is already committed and the target drifted since")
+            .with_suggestion("run a new `turu distill <scope> --begin` cycle"),
+    )
+}
 
-    // Conflict detection: live file must be byte-identical to --begin.
-    let live = fs::read_to_string(&target.path).map_err(WhisperError::from)?;
-    let live_sha = entry::sha256_hex(&live);
+/// Conflict detection: live file must be byte-identical to --begin.
+fn check_drift(live: &str, begin_sha: &str) -> Result<()> {
+    let live_sha = entry::sha256_hex(live);
     if live_sha != begin_sha {
         return Err(WhisperError::new(format!(
             "scope file changed since --begin (concurrent write?) — expected sha {}, live {}",
@@ -181,30 +230,30 @@ pub fn commit(target: &Target, revision: &str) -> Result<CommitReport> {
         ))
         .with_suggestion("re-run `turu distill <scope> --begin` and redo the rewrite"));
     }
+    Ok(())
+}
 
-    // The agent must have written the working file.
-    let distilled = fs::read_to_string(&working_path).map_err(|_| {
+/// Install the distilled working file: mark it committed, then atomically
+/// rename it over the live scope file (same filesystem).
+fn install(
+    target: &Target,
+    working_path: &std::path::Path,
+    committed_marker: &std::path::Path,
+) -> Result<()> {
+    let distilled = fs::read_to_string(working_path).map_err(|_| {
         WhisperError::new(format!(
             "working file not written: {}",
             working_path.display()
         ))
         .with_suggestion(format!(
-            "write the distilled content to {} then re-run --commit --revision {id}",
+            "write the distilled content to {} then re-run --commit",
             working_path.display()
         ))
     })?;
     let distilled_sha = entry::sha256_hex(&distilled);
-    fs::write(&committed_marker, &distilled_sha).map_err(WhisperError::from)?;
-
+    fs::write(committed_marker, &distilled_sha).map_err(WhisperError::from)?;
     // Atomic install: same filesystem, rename replaces the live file.
-    fs::rename(&working_path, &target.path).map_err(WhisperError::from)?;
-
-    Ok(CommitReport {
-        revision: id,
-        replaced: target.path.clone(),
-        snapshot_path,
-        noop: false,
-    })
+    fs::rename(working_path, &target.path).map_err(WhisperError::from)
 }
 
 /// Strict revision-id grammar: `<compact-timestamp>-<8 hex>` — also closes

@@ -246,42 +246,35 @@ mod tests {
     #[test]
     fn staleness_gates_follow_the_ro5_verdict() {
         let now = "2026-05-02T00:00:00Z";
-        let id = "a".repeat(64);
-        // Never used, within the 30d grace → fresh.
+        // Never used, within the 30d grace → fresh; beyond grace → NeverUsed.
         assert_eq!(
             staleness("2026-04-20T00:00:00Z", None, now),
             Staleness::Fresh
         );
-        // Never used, beyond grace → NeverUsed.
         assert_eq!(
             staleness("2026-01-01T00:00:00Z", None, now),
             Staleness::NeverUsed
         );
-        // Used recently → fresh.
-        let hot = Stats {
-            use_count: 3,
-            last_recalled: Some("2026-04-30T00:00:00Z".into()),
-        };
-        assert_eq!(
-            staleness("2026-01-01T00:00:00Z", Some(&hot), now),
-            Staleness::Fresh
-        );
-        // Used but last recall > 90d → Stale.
-        let stale = Stats {
-            use_count: 1,
-            last_recalled: Some("2026-01-02T00:00:00Z".into()),
-        };
-        assert_eq!(
-            staleness("2026-01-01T00:00:00Z", Some(&stale), now),
-            Staleness::Stale
-        );
-        // Unparseable timestamps degrade to fresh, never crash doctor.
+        // Used recently → fresh; last recall > 90d → Stale; unparseable
+        // timestamps degrade to fresh, never crash doctor.
+        let hot = used(3, "2026-04-30T00:00:00Z");
+        assert_eq!(verdict_for_used(&hot, now), Staleness::Fresh);
+        let stale = used(1, "2026-01-02T00:00:00Z");
+        assert_eq!(verdict_for_used(&stale, now), Staleness::Stale);
         assert_eq!(staleness("banana", Some(&stale), now), Staleness::Fresh);
-        assert_eq!(
-            staleness("2026-01-01T00:00:00Z", Some(&stale), "nonsense"),
-            Staleness::Fresh
-        );
-        let _ = id;
+        assert_eq!(verdict_for_used(&stale, "nonsense"), Staleness::Fresh);
+    }
+
+    fn used(count: u64, at: &str) -> Stats {
+        Stats {
+            use_count: count,
+            last_recalled: Some(at.into()),
+        }
+    }
+
+    /// Staleness verdict for a used entry recorded on 2026-01-01.
+    fn verdict_for_used(stats: &Stats, now: &str) -> Staleness {
+        staleness("2026-01-01T00:00:00Z", Some(stats), now)
     }
 
     #[test]

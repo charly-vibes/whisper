@@ -91,58 +91,82 @@ const MANAGED: &str =
 fn generate_whisper() -> PackFiles {
     let mut files = BTreeMap::new();
     files.insert("whisper.md".to_string(), router_skill());
-    files.insert("subs/key.md".to_string(), sub(
+    for (path, name, desc, protocol) in SUBS {
+        files.insert((*path).to_string(), sub(name, desc, protocol));
+    }
+    for (path, name, desc, protocol) in SUB_FALLBACKS {
+        files.insert((*path).to_string(), sub_fallback(name, desc, protocol));
+    }
+    files
+}
+
+/// The core sub-skill pages of the whisper pack.
+const SUBS: &[(&str, &str, &str, &str)] = &[
+    (
+        "subs/key.md",
         "whisper/key",
         "Derive canonical repo key, branch slug, and worktree slot",
         "1. `turu key --json` — deterministic; same repo → same key on every machine\n2. Never derive these paths by hand while the binary is present",
-    ));
-    files.insert("subs/resolve.md".to_string(), sub(
+    ),
+    (
+        "subs/resolve.md",
         "whisper/resolve",
         "Get the exact write destination for a knowledge scope",
         "1. `turu resolve global|repo|branch|worktree|group --json`\n2. If a `<!-- TURU:START -->` block exists in AGENTS.md, read the routing map from there\n3. Group scope routes to the shared group workspace when one is active",
-    ));
-    files.insert("subs/append.md".to_string(), sub(
+    ),
+    (
+        "subs/append.md",
         "whisper/append",
         "Extend-don't-duplicate knowledge into the right file",
         "1. Search first — check the target file for an existing note on the topic\n2. `turu append <scope> \"...\"` — appends verbatim, creates parents. Also accepted: `--text \"...\"` (repeatable), `--stdin`, or piped/heredoc stdin with no flag at all (`turu append branch <<'EOF'`). In a checkout, repo/branch scopes default to the checkout's own `.whisper/` (transport decision A: the repo's git is the transport)\n3. `--global` writes the machine-local store instead — the fallback for read-only checkouts (CI, no-push contributors); `--private` writes `.whisper/private/`, gitignored, never pushed\n4. Extend or correct existing notes instead of adding duplicates; no secrets, ever — git history is forever — prevention only",
-    ));
-    files.insert("subs/init.md".to_string(), sub(
+    ),
+    (
+        "subs/init.md",
         "whisper/init",
         "Create the workspace layout for this checkout",
         "1. `turu init --json` — creates rules.md, repo slot, branch slot, worktree slot, and the machine-local store slots\n2. Never overwrites existing files; ensures `.whisper/private/` is effectively ignored (appends the rule to the root .gitignore only when git check-ignore doesn't already report it)\n3. `turu sync` afterwards to (re)install the AGENTS.md managed block",
-    ));
-    files.insert("subs/status.md".to_string(), sub(
+    ),
+    (
+        "subs/status.md",
         "whisper/status",
         "One envelope with every relevant path and existence flag",
         "1. `turu status --json` — workspace root, group, repo key, slugs, paths\n2. `turu check --json` — legacy key variants, missing files, undefined groups",
-    ));
-    files.insert("subs/sync.md".to_string(), sub(
+    ),
+    (
+        "subs/sync.md",
         "whisper/sync",
         "Regenerate the managed routing block in AGENTS.md",
         "1. `turu sync --json` — updates `<!-- TURU:START -->` in AGENTS.md in place\n2. Agents in this repo read paths from the block instead of re-deriving them\n3. Also ensures the private-zone ignore rule (same rule as init; idempotent, never duplicates)",
-    ));
-    files.insert("subs/doctor.md".to_string(), sub(
+    ),
+    (
+        "subs/doctor.md",
         "whisper/doctor",
         "Deep workspace diagnostics",
         "1. `turu doctor --json` — layout, group health, legacy keys, managed block, skill pack staleness\n2. Each failing check carries a `fix` hint; apply it\n3. Privacy trio: `turu.private-ignore` (effective ignore via git check-ignore — text presence is not the truth), `turu.private-tracked` (FAIL when private knowledge is in history — git history is forever — prevention only), `turu.private-leaks` (advisory lint for machine paths, hostnames, token-shaped strings in public files)",
-    ));
-    files.insert("subs/link-manual.md".to_string(), sub_fallback(
+    ),
+];
+
+/// Manual-fallback pages (no turu command yet / decommission procedures).
+const SUB_FALLBACKS: &[(&str, &str, &str, &str)] = &[
+    (
+        "subs/link-manual.md",
         "whisper/link-manual",
         "Link a plan to the workspace (manual fallback — no turu command yet)",
         "Follow the manual procedure in incitaciones `content/distilled/whisper/references/` if present; otherwise: derive the repo key with `turu key`, then record the beads epic ID in the branch slot's context.md via `turu append branch`.",
-    ));
-    files.insert("subs/decommission-manual.md".to_string(), sub_fallback(
+    ),
+    (
+        "subs/decommission-manual.md",
         "whisper/decommission-manual",
         "Decommission a branch/worktree slot (manual fallback)",
         "1. Confirm the branch is merged/decommissioned in beads if available\n2. Remove the slot directory under the branch/worktree root (canonical key from `turu key`)\n3. Keep env.md knowledge by promoting it: repo-wide facts → `turu append repo`, global → `turu append global`",
-    ));
-    files.insert("subs/consolidate-manual.md".to_string(), sub_fallback(
+    ),
+    (
+        "subs/consolidate-manual.md",
         "whisper/consolidate-manual",
         "Migrate legacy repo-key directories to the canonical key (manual fallback)",
         "1. `turu doctor --json` lists variants under `turu.legacy-keys`\n2. Move directory contents into the canonical key dir, merge env.md by extending, never duplicating\n3. Re-run `turu doctor` — the check must pass",
-    ));
-    files
-}
+    ),
+];
 
 fn sub(name: &str, description: &str, protocol: &str) -> String {
     format!(
@@ -219,9 +243,14 @@ mod tests {
                 "router must contain {expected:?}"
             );
         }
-        // add-repo-private-scope: the append/init/sync/doctor subs carry the
-        // private-zone contract — transport decision A (repo's own git),
-        // the private zone, and the --global fallback for read-only checkouts.
+        assert_private_contract(&files);
+        assert_managed_header(&files);
+    }
+
+    /// add-repo-private-scope: the append/init/sync/doctor subs carry the
+    /// private-zone contract — transport decision A (repo's own git), the
+    /// private zone, and the --global fallback for read-only checkouts.
+    fn assert_private_contract(files: &PackFiles) {
         let append = &files["subs/append.md"];
         for expected in ["--private", "--global", "git history is forever"] {
             assert!(
@@ -229,21 +258,22 @@ mod tests {
                 "append sub must contain {expected:?}"
             );
         }
-        let init = &files["subs/init.md"];
-        assert!(init.contains(".whisper/private/"), "{init}");
-        let sync = &files["subs/sync.md"];
-        assert!(sync.contains("private-zone ignore rule"), "{sync}");
-        let doctor = &files["subs/doctor.md"];
+        assert!(files["subs/init.md"].contains(".whisper/private/"));
+        assert!(files["subs/sync.md"].contains("private-zone ignore rule"));
         for expected in [
             "turu.private-ignore",
             "turu.private-tracked",
             "turu.private-leaks",
         ] {
             assert!(
-                doctor.contains(expected),
+                files["subs/doctor.md"].contains(expected),
                 "doctor sub must contain {expected:?}"
             );
         }
+    }
+
+    /// Every pack page lives under the pack root and carries the managed marker.
+    fn assert_managed_header(files: &PackFiles) {
         for sub in files.keys() {
             assert!(
                 sub.starts_with("whisper.md") || sub.starts_with("subs/"),
