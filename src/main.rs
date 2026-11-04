@@ -8,16 +8,14 @@
 //! contract and git's exclusion state never drift apart.
 
 use std::cell::Cell;
-use std::io::{IsTerminal, Read, Write};
-use std::path::PathBuf;
+use std::io::Write;
 use std::process::exit;
 
 use clap::{Parser, Subcommand};
 use genesis::guide::{CliFormat, CliVerbosity, Output, OutputFormat, Verbosity};
-use whisper::{
-    CLI_VERSION, WhisperError, bundle, config, distill, doctor, entry, recall, skill_pack,
-    workspace,
-};
+mod cmds;
+
+use whisper::{CLI_VERSION, entry};
 
 thread_local! {
     static FORMAT: Cell<OutputFormat> = const { Cell::new(OutputFormat::Human) };
@@ -43,7 +41,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
-enum Commands {
+pub(crate) enum Commands {
     /// Canonical repo key, branch slug, and worktree slot (pure determinism).
     Key,
     /// Resolve the exact destination path for a knowledge scope.
@@ -172,7 +170,7 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
-enum BundleCommand {
+pub(crate) enum BundleCommand {
     /// Pack a scope into a deterministic bundle (keyed by repo key).
     Pack {
         /// Scope: global | repo | branch | worktree | group
@@ -194,7 +192,7 @@ enum BundleCommand {
 }
 
 #[derive(Subcommand)]
-enum SkillCommand {
+pub(crate) enum SkillCommand {
     /// Install the pack (default: <repo-root>/.turu/skills).
     Install {
         /// Destination dir. Common alternatives: ~/.claude/skills,
@@ -213,7 +211,7 @@ fn main() {
 }
 
 fn run(cli: Cli) -> i32 {
-    match dispatch(&cli) {
+    match cmds::dispatch(&cli) {
         Ok(output) => emit_ok(&output),
         Err(err) => {
             // Adopt the genesis scratch contract: persist the last error on
@@ -227,10 +225,10 @@ fn run(cli: Cli) -> i32 {
                 kind: "error".to_string(),
             };
             genesis::feedback::scratch::write_scratch_best_effort("turu", &record);
-            let mut out = Output::<String>::failure(err.message.clone());
-            if let Some(s) = &err.suggestion {
-                out = out.with_next_step(s);
-            }
+            let out = match &err.suggestion {
+                Some(s) => Output::<String>::failure(err.message.clone()).with_next_step(s),
+                None => Output::<String>::failure(err.message.clone()),
+            };
             emit_err(&out);
             1
         }
@@ -244,595 +242,26 @@ fn scratch_timestamp() -> String {
 }
 
 fn emit_ok<T: serde::Serialize + std::fmt::Debug>(output: &Output<T>) -> i32 {
+    emit(output, true)
+}
+
+fn emit_err(output: &Output<String>) -> i32 {
+    emit(output, false)
+}
+
+/// Shared emit: success exits 0; failures exit 1 (write errors report and
+/// exit 1 either way).
+fn emit<T: serde::Serialize + std::fmt::Debug>(output: &Output<T>, success: bool) -> i32 {
     let mut stdout = std::io::stdout();
     let mut stderr = std::io::stderr();
     let format = FORMAT.with(|f| f.get());
     let verbosity = VERBOSITY.with(|v| v.get());
     match output.emit(CLI_VERSION, format, verbosity, &mut stdout, &mut stderr) {
-        Ok(()) => 0,
+        Ok(()) if success => 0,
+        Ok(()) => 1,
         Err(e) => {
             let _ = writeln!(stderr, "whisper: write error: {e}");
             1
         }
     }
-}
-
-fn emit_err(output: &Output<String>) -> i32 {
-    let mut stdout = std::io::stdout();
-    let mut stderr = std::io::stderr();
-    let format = FORMAT.with(|f| f.get());
-    let verbosity = VERBOSITY.with(|v| v.get());
-    match output.emit(CLI_VERSION, format, verbosity, &mut stdout, &mut stderr) {
-        Ok(()) => 1,
-        Err(_) => 1,
-    }
-}
-
-fn dispatch(cli: &Cli) -> whisper::Result<Output<serde_json::Value>> {
-    let cwd = std::env::current_dir().map_err(WhisperError::from)?;
-    let facts = workspace::collect_facts(&cwd);
-    let resolved = config::load(&cwd, &facts.repo_key)?;
-
-    let out: (serde_json::Value, Vec<String>, Option<String>) = match &cli.command {
-        Commands::Key => {
-            let data = serde_json::json!({
-                "repo_key": facts.repo_key,
-                "branch_slug": facts.branch_slug,
-                "worktree_slot": facts.worktree_slot,
-                "workspace_root": resolved.workspace_root,
-                "group": resolved.group.as_ref().map(|(n, _)| n.clone()),
-            });
-            (
-                data,
-                vec![],
-                Some("turu resolve <scope> to get an exact write destination".into()),
-            )
-        }
-        Commands::Resolve {
-            scope,
-            global,
-            private,
-        } => {
-            let scope: workspace::Scope = scope.parse()?;
-            let target = append_target(scope, *global, *private, &facts, &resolved)?;
-            let data = serde_json::json!({
-                "scope": target.scope,
-                "path": target.path,
-                "exists": target.path.exists(),
-            });
-            (
-                data,
-                vec![],
-                Some(format!(
-                    "turu append {} --text \"...\" (positional text or piped stdin also work)",
-                    scope_name(target.scope)
-                )),
-            )
-        }
-        Commands::Append {
-            scope,
-            text,
-            texts,
-            stdin,
-            topic,
-            supersedes,
-            global,
-            private,
-        } => {
-            let scope: workspace::Scope = scope.parse()?;
-            let text = collect_text(text.as_deref(), texts, *stdin)?;
-            if text.trim().is_empty() {
-                return Err(WhisperError::new("nothing to append")
-                    .with_suggestion("pass --text \"...\", a positional text, or pipe stdin"));
-            }
-            let target = append_target(scope, *global, *private, &facts, &resolved)?;
-            let ts = entry::parse_or_now(std::env::var("TURU_NOW").ok().as_deref())?;
-            let report = workspace::append_entry(
-                &target,
-                &append_scope_key(scope, &target, &facts, &resolved),
-                &text,
-                topic.as_deref(),
-                supersedes.as_deref(),
-                &ts,
-            )?;
-            let data = serde_json::json!({
-                "scope": target.scope,
-                "path": target.path,
-                "appended_bytes": report.bytes,
-                "id": report.id,
-                "duplicate": report.duplicate,
-                "superseded": report.superseded,
-            });
-            let hint = if report.duplicate {
-                Some(
-                    "entry already present (same scope + second + text) — nothing written"
-                        .to_string(),
-                )
-            } else {
-                None
-            };
-            // Advisory incident-log lint (whisper-4xl): warn, never block.
-            let mut warnings = vec![];
-            if let Some(advisory) = entry::incident_log_density(&text) {
-                warnings.push(advisory);
-            }
-            (data, warnings, hint)
-        }
-        Commands::Recall {
-            scope,
-            topic,
-            budget,
-            digest,
-            include_superseded,
-            no_usage,
-        } => {
-            let recall_scope = recall::parse_recall_scope(scope)?;
-            let data = recall::recall(
-                &recall_scope,
-                &facts,
-                &resolved,
-                &recall::RecallQuery {
-                    topic: topic.clone(),
-                    budget: *budget,
-                    include_superseded: *include_superseded,
-                    digest: *digest,
-                    record_usage: !*no_usage,
-                },
-            )?;
-            // Empty scope (whisper-2c1): ok:true + advisory warning, never
-            // a hard failure that breaks && chains or set -e.
-            let mut warnings = vec![];
-            if data.get("empty") == Some(&serde_json::Value::Bool(true)) {
-                warnings.push(
-                    "scope is empty — nothing to recall; append entries or check the routing block"
-                        .into(),
-                );
-            }
-            (
-                data,
-                warnings,
-                Some("recall serves mechanically — when to load it is your policy".into()),
-            )
-        }
-        Commands::Distill {
-            scope,
-            begin,
-            commit,
-            revision,
-        } => {
-            let scope: workspace::Scope = scope.parse()?;
-            if *begin == *commit {
-                return Err(WhisperError::new("pass exactly one of --begin or --commit"));
-            }
-            if *begin {
-                let ts = entry::parse_or_now(std::env::var("TURU_NOW").ok().as_deref())?;
-                let rev = distill::begin_for_scope(scope, &facts, &resolved, &ts)?;
-                // Lint the snapshot's entry texts (whisper-4xl) — never the
-                // raw file, where [id:…] markers would false-positive.
-                let mut warnings = vec![];
-                let snapshot = std::fs::read_to_string(&rev.snapshot_path).unwrap_or_default();
-                for item in entry::parse_file(&snapshot) {
-                    if let entry::Item::Entry(e) = item
-                        && let Some(advisory) = entry::incident_log_density(&e.text)
-                    {
-                        warnings.push(format!("{}: {}", &e.id[..12], advisory));
-                    }
-                }
-                (
-                    serde_json::json!({
-                        "phase": "begin",
-                        "revision": rev.id,
-                        "snapshot_path": rev.snapshot_path,
-                        "working_path": rev.working_path,
-                        "target_path": rev.target_path,
-                        "sha256": rev.sha256,
-                        "recency": rev.recency,
-                    }),
-                    warnings,
-                    Some(format!(
-                        "rewrite {} with the distilled content, then: turu distill {} --commit --revision {}",
-                        rev.working_path.display(),
-                        scope_name(scope),
-                        rev.id
-                    )),
-                )
-            } else {
-                let revision = revision.as_deref().ok_or_else(|| {
-                    WhisperError::new("--commit requires --revision <id>")
-                        .with_suggestion("turu distill <scope> --begin returns the revision id")
-                })?;
-                let report = distill::commit_for_scope(scope, &facts, &resolved, revision)?;
-                (
-                    serde_json::json!({
-                        "phase": "commit",
-                        "revision": report.revision,
-                        "replaced": report.replaced,
-                        "snapshot_path": report.snapshot_path,
-                        "noop": report.noop,
-                    }),
-                    vec![],
-                    Some(format!(
-                        "snapshot retained at {} (immutable)",
-                        report.snapshot_path.display()
-                    )),
-                )
-            }
-        }
-        Commands::Bundle { command } => match command {
-            BundleCommand::Pack { scope, out } => {
-                let scope: workspace::Scope = scope.parse()?;
-                let data = bundle::pack(scope, &facts, &resolved, out.as_deref())?;
-                (
-                    data,
-                    vec![],
-                    Some("bundle is transport-agnostic — move it however you decide".into()),
-                )
-            }
-            BundleCommand::Unpack { file, stdin } => {
-                let input = bundle::read_input(file.as_deref(), *stdin)?;
-                let data = bundle::unpack(&input, &facts, &resolved)?;
-                (
-                    data,
-                    vec![],
-                    Some("merge is extend-only — existing content untouched".into()),
-                )
-            }
-        },
-        Commands::Init => {
-            let report = workspace::init(&facts, &resolved)?;
-            let data = serde_json::json!({
-                "workspace_root": report.workspace_root,
-                "group": report.group,
-                "created": report.created,
-                "existing": report.existing,
-                "ignore_rule_added": report.ignore_rule_added,
-            });
-            (
-                data,
-                vec![],
-                Some("turu status to see the full layout".to_string()),
-            )
-        }
-        Commands::Status => {
-            let data = serde_json::json!({
-                "workspace_root": resolved.workspace_root,
-                "group": resolved.group.as_ref().map(|(n, _)| n.clone()),
-                "repo_key": facts.repo_key,
-                "branch_slug": facts.branch_slug,
-                "worktree_slot": facts.worktree_slot,
-                "paths": paths_for(&facts, &resolved)?,
-            });
-            (
-                data,
-                vec![],
-                Some("turu check to validate the workspace".to_string()),
-            )
-        }
-        Commands::Check => {
-            let mut warnings = Vec::new();
-            let paths = paths_for(&facts, &resolved)?;
-            let variants = workspace::legacy_variants(&facts, &resolved);
-            if !variants.is_empty() {
-                warnings.push(format!(
-                    "legacy repo-key variants found under repos/: [{}] — route new knowledge into the canonical key '{}'",
-                    variants.join(", "),
-                    facts.repo_key
-                ));
-            }
-            if !resolved.workspace_root.join("rules.md").exists() {
-                warnings.push(format!(
-                    "global rules file missing at {}",
-                    resolved.workspace_root.join("rules.md").display()
-                ));
-            }
-            if let Some(real_root) = &resolved.shadowed_global_root {
-                let real = real_root.join("rules.md");
-                let shadowed = resolved.workspace_root.join("rules.md");
-                let diverged = shadowed.exists()
-                    && std::fs::read_to_string(&real).unwrap_or_default()
-                        != std::fs::read_to_string(&shadowed).unwrap_or_default();
-                if real.exists() && (!shadowed.exists() || diverged) {
-                    warnings.push(format!(
-                        "repo-private workspace_root shadows the global rules file at {} — run `turu doctor` for detail",
-                        real.display()
-                    ));
-                }
-            }
-            let data = serde_json::json!({
-                "workspace_root": resolved.workspace_root,
-                "repo_key": facts.repo_key,
-                "legacy_variants": variants,
-                "paths": paths,
-            });
-            let hint = if warnings.is_empty() {
-                Some("workspace looks consistent".to_string())
-            } else {
-                Some("whisper init to create missing files".to_string())
-            };
-            (data, warnings, hint)
-        }
-        Commands::Consolidate => {
-            let report = workspace::consolidate(&facts, &resolved)?;
-            let data = serde_json::json!({
-                "canonical_dir": report.canonical_dir,
-                "variants": report.variants,
-                "moved": report.moved,
-                "merged": report.merged,
-            });
-            (
-                data,
-                vec![],
-                Some("turu doctor — the legacy-keys check must pass".to_string()),
-            )
-        }
-        Commands::Doctor => {
-            let report = doctor::run_checks(&facts, &resolved, &cwd);
-            // Advisory leak-shape findings surface in warnings[] too (3.2c).
-            let warnings = doctor::leak_warnings(&facts, &resolved);
-            let hint = if report.is_healthy() {
-                "workspace is healthy".to_string()
-            } else {
-                "apply the listed fix commands, or run `turu init`".to_string()
-            };
-            let data =
-                serde_json::to_value(&report).map_err(|e| WhisperError::new(e.to_string()))?;
-            (data, warnings, Some(hint))
-        }
-        Commands::Sync { file } => {
-            // Checkout self-protection (add-repo-private-scope 3.1): sync
-            // ensures the private-zone ignore rule alongside the routing map.
-            let ignore_rule_added = workspace::ensure_private_ignored(&facts)?;
-            let (target, outcome) =
-                workspace::agents_sync(&cwd, file.as_deref(), &facts, &resolved)?;
-            let data = serde_json::json!({
-                "target": target,
-                "outcome": outcome,
-                "ignore_rule_added": ignore_rule_added,
-            });
-            (
-                data,
-                vec![],
-                Some(format!(
-                    "`{}` now carries the deterministic routing map ({outcome})",
-                    target.display()
-                )),
-            )
-        }
-        Commands::Feedback {
-            kind,
-            from_last_error,
-            dry_run,
-        } => {
-            let args =
-                genesis::feedback::FeedbackArgs::new(kind.clone(), *dry_run, *from_last_error);
-            let repo = env!("CARGO_PKG_REPOSITORY")
-                .trim_start_matches("https://github.com/")
-                .trim_start_matches("http://github.com/")
-                .to_string();
-            let repo_root = workspace::repo_root(&cwd);
-            let result = genesis::feedback::handle_feedback(
-                &args,
-                "turu",
-                CLI_VERSION,
-                &repo,
-                &repo_root,
-            )
-            .map_err(|msg| {
-                let suggestion = if msg.starts_with("unknown kind") {
-                    "pass one of: bug, feature, question, chore".to_string()
-                } else {
-                    "pipe content into stdin, use --from-last-error, or preview with `turu feedback bug --dry-run`"
-                        .to_string()
-                };
-                WhisperError::new(msg).with_suggestion(suggestion)
-            })?;
-            let (data, hint) = match result {
-                genesis::feedback::gh::GhResult::Created { url, number } => (
-                    serde_json::json!({ "outcome": "created", "url": url, "issue": number }),
-                    "issue filed — the maintainers will pick it up".to_string(),
-                ),
-                genesis::feedback::gh::GhResult::FallbackUrl(url) => (
-                    serde_json::json!({ "outcome": "fallback", "url": url }),
-                    "issue body printed to stderr — open the url to file it manually".to_string(),
-                ),
-                genesis::feedback::gh::GhResult::LocalFile(path) => (
-                    serde_json::json!({ "outcome": "saved-local", "file": path }),
-                    "network unavailable — attach this file to a new GitHub issue".to_string(),
-                ),
-            };
-            (data, vec![], Some(hint))
-        }
-        Commands::Skill {
-            command: SkillCommand::Install { dir },
-        } => {
-            let root = match dir {
-                Some(d) => PathBuf::from(d),
-                None => workspace::repo_root(&cwd).join(".turu").join("skills"),
-            };
-            let pack_dir = root.join("whisper");
-            let files = skill_pack::generate_pack("whisper").map_err(WhisperError::new)?;
-            for (rel, content) in &files {
-                let dest = pack_dir.join(rel);
-                std::fs::create_dir_all(dest.parent().unwrap()).map_err(WhisperError::from)?;
-                std::fs::write(&dest, content).map_err(WhisperError::from)?;
-            }
-            let data = serde_json::json!({
-                "pack": "whisper",
-                "target": pack_dir,
-                "files": files.len(),
-                "hash": skill_pack::pack_content_hash(&files),
-            });
-            (
-                data,
-                vec![],
-                Some(format!(
-                    "pack installed at `{}` — `turu doctor` reports staleness",
-                    pack_dir.display()
-                )),
-            )
-        }
-    };
-
-    let (data, warnings, hint) = out;
-    let mut output = Output::success(data).with_verbosity(0);
-    for w in warnings {
-        output = output.with_warning(w);
-    }
-    if let Some(h) = hint {
-        output = output.with_next_step(h);
-    }
-    Ok(output)
-}
-
-fn scope_name(scope: workspace::Scope) -> &'static str {
-    match scope {
-        workspace::Scope::Global => "global",
-        workspace::Scope::Repo => "repo",
-        workspace::Scope::Branch => "branch",
-        workspace::Scope::Worktree => "worktree",
-        workspace::Scope::Group => "group",
-    }
-}
-
-/// Destination for write-path verbs (resolve/append): the checkout's
-/// repo-local root for `repo`/`branch` (decision A — knowledge travels with
-/// the repo's git), unless `--global` selects the machine-local store.
-/// `--global` on other scopes is an error (they have a single home).
-fn append_target(
-    scope: workspace::Scope,
-    global: bool,
-    private: bool,
-    facts: &workspace::Facts,
-    resolved: &config::Resolved,
-) -> whisper::Result<workspace::Target> {
-    if global && private {
-        return Err(WhisperError::new(
-            "--global and --private are mutually exclusive — one destination per write",
-        )
-        .with_suggestion(
-            "pick the machine-local store (--global) or the checkout's private zone (--private)",
-        ));
-    }
-    if global {
-        return global_target(scope, facts, resolved);
-    }
-    if private {
-        return workspace::private_zone_target(scope, facts, resolved);
-    }
-    workspace::resolve(scope, facts, resolved)
-}
-
-/// The `--global` escape-hatch destination: the machine-local store for
-/// `repo`/`branch`; an error on other scopes (they have a single home).
-fn global_target(
-    scope: workspace::Scope,
-    facts: &workspace::Facts,
-    resolved: &config::Resolved,
-) -> whisper::Result<workspace::Target> {
-    if !matches!(scope, workspace::Scope::Repo | workspace::Scope::Branch) {
-        return Err(
-            WhisperError::new("--global applies only to the repo and branch scopes")
-                .with_suggestion(format!(
-                    "{} always writes to its single home — drop --global",
-                    scope_name(scope)
-                )),
-        );
-    }
-    if facts.repo_local_root.is_none() {
-        return Err(WhisperError::new(
-            "--global is redundant outside a git repo — repo/branch already resolve to the store",
-        )
-        .with_suggestion("drop --global"));
-    }
-    let mut checkout = facts.clone();
-    checkout.repo_local_root = None;
-    workspace::resolve(scope, &checkout, resolved)
-}
-
-/// Scope key for an appended entry, matching where it landed: append
-/// derives it from the resolved target so store and checkout never share
-/// an id space (decision A — same text in both layers stays distinct).
-fn append_scope_key(
-    scope: workspace::Scope,
-    target: &workspace::Target,
-    facts: &workspace::Facts,
-    resolved: &config::Resolved,
-) -> String {
-    // Layer variants of the repo/branch layout, each its own id space:
-    // committed checkout (@local), private zone (@private), and the
-    // machine-local store (bare scope key).
-    let layer = |sub: &str| -> Option<std::path::PathBuf> {
-        match (&scope, &facts.repo_local_root) {
-            (workspace::Scope::Repo, Some(root)) => Some(root.join(sub).join("env.md")),
-            (workspace::Scope::Branch, Some(root)) => Some(
-                root.join(sub)
-                    .join("branches")
-                    .join(&facts.branch_slug)
-                    .join("notes.md"),
-            ),
-            _ => None,
-        }
-    };
-    let suffix = if layer("").as_deref() == Some(target.path.as_path()) {
-        "@local"
-    } else if layer("private").as_deref() == Some(target.path.as_path()) {
-        "@private"
-    } else {
-        ""
-    };
-    format!("{}{}", workspace::scope_key(scope, facts, resolved), suffix)
-}
-
-fn paths_for(
-    facts: &workspace::Facts,
-    resolved: &config::Resolved,
-) -> whisper::Result<serde_json::Map<String, serde_json::Value>> {
-    let mut map = serde_json::Map::new();
-    for scope in [
-        workspace::Scope::Global,
-        workspace::Scope::Repo,
-        workspace::Scope::Branch,
-        workspace::Scope::Worktree,
-        workspace::Scope::Group,
-    ] {
-        // Group scope may legitimately be inactive; record it as null.
-        match workspace::resolve(scope, facts, resolved) {
-            Ok(t) => {
-                map.insert(scope_name(scope).to_string(), serde_json::json!(t.path));
-            }
-            Err(_) => {
-                map.insert(scope_name(scope).to_string(), serde_json::Value::Null);
-            }
-        }
-    }
-    Ok(map)
-}
-
-/// Payload for append, in order of explicitness: --text (repeatable) and the
-/// positional text win over stdin; when neither carries text and stdin is not
-/// a TTY (piped/redirected), stdin is read automatically so the natural
-/// `turu append <scope> <<'EOF'` heredoc form works without --stdin.
-fn collect_text(text: Option<&str>, texts: &[String], use_stdin: bool) -> whisper::Result<String> {
-    if use_stdin {
-        return read_stdin();
-    }
-    let mut joined = texts.to_vec();
-    if let Some(t) = text {
-        joined.push(t.to_owned());
-    }
-    if !joined.is_empty() {
-        return Ok(joined.join("\n"));
-    }
-    if !std::io::stdin().is_terminal() {
-        return read_stdin();
-    }
-    Ok(String::new())
-}
-
-fn read_stdin() -> whisper::Result<String> {
-    let mut buf = String::new();
-    std::io::stdin()
-        .read_to_string(&mut buf)
-        .map_err(WhisperError::from)?;
-    Ok(buf)
 }
