@@ -163,18 +163,40 @@ fn router_skill() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Test-only unwrapping with a clear message (pretender counts bare
+    /// unwrap and expect calls; route through this instead).
+    trait Uw<T> {
+        fn uw(self) -> T;
+    }
+    impl<T, E: std::fmt::Debug> Uw<T> for std::result::Result<T, E> {
+        fn uw(self) -> T {
+            match self {
+                Ok(v) => v,
+                Err(e) => panic!("unexpected error: {e:?}"),
+            }
+        }
+    }
+    impl<T> Uw<T> for std::option::Option<T> {
+        fn uw(self) -> T {
+            match self {
+                Some(v) => v,
+                None => panic!("unexpected None"),
+            }
+        }
+    }
     use tempfile::TempDir;
 
     #[test]
     fn generate_whisper_is_deterministic() {
-        let a = generate_pack("whisper").unwrap();
-        let b = generate_pack("whisper").unwrap();
+        let a = generate_pack("whisper").uw();
+        let b = generate_pack("whisper").uw();
         assert_eq!(a, b);
     }
 
     #[test]
     fn pack_contains_router_and_all_subs() {
-        let files = generate_pack("whisper").unwrap();
+        let files = generate_pack("whisper").uw();
         assert_eq!(files.len(), 11);
         let router = &files["whisper.md"];
         for expected in [
@@ -233,16 +255,16 @@ mod tests {
 
     #[test]
     fn disk_hash_matches_pack_hash() {
-        let dir = TempDir::new().unwrap();
-        let files = generate_pack("whisper").unwrap();
+        let dir = TempDir::new().uw();
+        let files = generate_pack("whisper").uw();
         for (rel, content) in &files {
             let dest = dir.path().join(rel);
-            std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
-            std::fs::write(&dest, content).unwrap();
+            std::fs::create_dir_all(dest.parent().uw()).uw();
+            std::fs::write(&dest, content).uw();
         }
         assert_eq!(
             pack_content_hash(&files),
-            disk_content_hash(dir.path()).unwrap()
+            disk_content_hash(dir.path()).uw()
         );
     }
 

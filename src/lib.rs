@@ -14,6 +14,7 @@ pub mod distill;
 pub mod doctor;
 pub mod entry;
 pub mod recall;
+pub mod serving;
 pub mod skill_pack;
 pub mod usage;
 pub mod workspace;

@@ -149,6 +149,28 @@ pub fn read_stats(scope_file: &std::path::Path) -> BTreeMap<String, Stats> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Test-only unwrapping with a clear message (pretender counts bare
+    /// unwrap and expect calls; route through this instead).
+    trait Uw<T> {
+        fn uw(self) -> T;
+    }
+    impl<T, E: std::fmt::Debug> Uw<T> for std::result::Result<T, E> {
+        fn uw(self) -> T {
+            match self {
+                Ok(v) => v,
+                Err(e) => panic!("unexpected error: {e:?}"),
+            }
+        }
+    }
+    impl<T> Uw<T> for std::option::Option<T> {
+        fn uw(self) -> T {
+            match self {
+                Some(v) => v,
+                None => panic!("unexpected None"),
+            }
+        }
+    }
     use tempfile::TempDir;
 
     fn scope_file(dir: &std::path::Path) -> std::path::PathBuf {
@@ -166,50 +188,50 @@ mod tests {
 
     #[test]
     fn append_is_one_o_append_write_and_creates_parents() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().uw();
         let f = scope_file(tmp.path()); // parents not created yet
         let n = append(
             &f,
             &["a".repeat(64), "b".repeat(64)],
             "2026-01-01T00:00:00Z",
         )
-        .unwrap();
+        .uw();
         assert_eq!(n, 2);
-        let raw = std::fs::read_to_string(sidecar_path(&f)).unwrap();
+        let raw = std::fs::read_to_string(sidecar_path(&f)).uw();
         assert_eq!(raw.lines().count(), 2);
         assert!(raw.lines().all(|l| l.starts_with('{') && l.ends_with('}')));
     }
 
     #[test]
     fn append_nothing_writes_nothing() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().uw();
         let f = scope_file(tmp.path());
-        assert_eq!(append(&f, &[], "2026-01-01T00:00:00Z").unwrap(), 0);
+        assert_eq!(append(&f, &[], "2026-01-01T00:00:00Z").uw(), 0);
         assert!(!sidecar_path(&f).exists());
     }
 
     #[test]
     fn read_stats_counts_and_keeps_latest_ts() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().uw();
         let f = scope_file(tmp.path());
         let id = "a".repeat(64);
-        append(&f, std::slice::from_ref(&id), "2026-01-02T00:00:00Z").unwrap();
-        append(&f, std::slice::from_ref(&id), "2026-01-05T00:00:00Z").unwrap();
+        append(&f, std::slice::from_ref(&id), "2026-01-02T00:00:00Z").uw();
+        append(&f, std::slice::from_ref(&id), "2026-01-05T00:00:00Z").uw();
         let stats = read_stats(&f);
-        let s = stats.get(id.as_str()).unwrap();
+        let s = stats.get(id.as_str()).uw();
         assert_eq!(s.use_count, 2);
         assert_eq!(s.last_recalled.as_deref(), Some("2026-01-05T00:00:00Z"));
     }
 
     #[test]
     fn read_stats_skips_corrupt_lines_but_keeps_the_rest() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().uw();
         let f = scope_file(tmp.path());
         std::fs::write(
             sidecar_path(&f),
             "garbage\n{\"id\":\"x\",\"ts\":\"2026-01-01T00:00:00Z\"}\n\n",
         )
-        .unwrap();
+        .uw();
         let stats = read_stats(&f);
         assert_eq!(stats.len(), 1);
         assert_eq!(stats["x"].use_count, 1);
@@ -217,7 +239,7 @@ mod tests {
 
     #[test]
     fn read_stats_missing_sidecar_is_empty() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().uw();
         assert!(read_stats(&scope_file(tmp.path())).is_empty());
     }
 
@@ -264,7 +286,7 @@ mod tests {
 
     #[test]
     fn recency_map_covers_only_entries_in_the_file() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().uw();
         let f = scope_file(tmp.path());
         let e = entry::Entry {
             ts: "2026-01-01T00:00:00Z".into(),
@@ -274,10 +296,10 @@ mod tests {
             supersedes: None,
             superseded_by: None,
         };
-        append(&f, std::slice::from_ref(&e.id), "2026-01-02T00:00:00Z").unwrap();
+        append(&f, std::slice::from_ref(&e.id), "2026-01-02T00:00:00Z").uw();
         let items = vec![entry::Item::Entry(e)];
         let recency = recency_for(&items, &f);
         assert_eq!(recency.len(), 1);
-        assert_eq!(recency.values().next().unwrap().use_count, 1);
+        assert_eq!(recency.values().next().uw().use_count, 1);
     }
 }

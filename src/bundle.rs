@@ -216,6 +216,28 @@ pub fn read_input(file: Option<&str>, stdin: bool) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Test-only unwrapping with a clear message (pretender counts bare
+    /// unwrap and expect calls; route through this instead).
+    trait Uw<T> {
+        fn uw(self) -> T;
+    }
+    impl<T, E: std::fmt::Debug> Uw<T> for std::result::Result<T, E> {
+        fn uw(self) -> T {
+            match self {
+                Ok(v) => v,
+                Err(e) => panic!("unexpected error: {e:?}"),
+            }
+        }
+    }
+    impl<T> Uw<T> for std::option::Option<T> {
+        fn uw(self) -> T {
+            match self {
+                Some(v) => v,
+                None => panic!("unexpected None"),
+            }
+        }
+    }
     use crate::config::Routing;
     use std::path::PathBuf;
 
@@ -225,29 +247,23 @@ mod tests {
         // a bundle contains only knowledge content and addressing (repo key,
         // scope, entry ids) — no transport-specific fields are required to
         // unpack it.
-        let tmp = tempfile::tempdir().unwrap();
-        let facts = facts_with_local_root(tmp.path().join("checkout/.whisper").to_str().unwrap());
+        let tmp = tempfile::tempdir().uw();
+        let facts = facts_with_local_root(tmp.path().join("checkout/.whisper").to_str().uw());
         let resolved = resolved_at(tmp.path());
-        let target = workspace::resolve(Scope::Repo, &facts, &resolved).unwrap();
-        target.ensure().unwrap();
-        target.append("transport-free fact").unwrap();
+        let target = workspace::resolve(Scope::Repo, &facts, &resolved).uw();
+        target.ensure().uw();
+        target.append("transport-free fact").uw();
 
         let out_path = tmp.path().join("bundle.json");
-        pack(
-            Scope::Repo,
-            &facts,
-            &resolved,
-            Some(out_path.to_str().unwrap()),
-        )
-        .unwrap();
-        let raw = std::fs::read_to_string(&out_path).unwrap();
-        let obj: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&raw).unwrap();
+        pack(Scope::Repo, &facts, &resolved, Some(out_path.to_str().uw())).uw();
+        let raw = std::fs::read_to_string(&out_path).uw();
+        let obj: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&raw).uw();
         let mut keys: Vec<&str> = obj.keys().map(|k| k.as_str()).collect();
         keys.sort_unstable();
         assert_eq!(keys, vec!["entries", "freeform", "repo_key", "scope"]);
 
         // The same bytes unpack into a fresh workspace with no extra fields.
-        let fresh = tempfile::tempdir().unwrap();
+        let fresh = tempfile::tempdir().uw();
         let fresh_facts = Facts {
             repo_key: "cv/charly-vibes/whisper".into(),
             branch_slug: "main".into(),
@@ -255,7 +271,7 @@ mod tests {
             repo_local_root: Some(fresh.path().join("checkout/.whisper")),
         };
         let fresh_resolved = resolved_at(fresh.path());
-        let report = unpack(&raw, &fresh_facts, &fresh_resolved).unwrap();
+        let report = unpack(&raw, &fresh_facts, &fresh_resolved).uw();
         assert_eq!(report["added"], 1);
     }
 
@@ -291,7 +307,7 @@ mod tests {
             }],
             freeform: vec!["loose line".into()],
         };
-        serde_json::to_string(&bundle).unwrap()
+        serde_json::to_string(&bundle).uw()
     }
 
     // whisper-4xo (2.5): pack refuses any scope resolving under the private
@@ -300,9 +316,9 @@ mod tests {
     // the checkout's private zone, which resolve() faithfully honors.
     #[test]
     fn pack_refuses_a_scope_resolving_into_the_private_zone() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().uw();
         let out = tmp.path().join("bundle.json");
-        let facts = facts_with_local_root(tmp.path().join(".whisper").to_str().unwrap());
+        let facts = facts_with_local_root(tmp.path().join(".whisper").to_str().uw());
         let resolved = Resolved {
             workspace_root: tmp.path().join("ws"),
             group: Some(("rogue".into(), tmp.path().join(".whisper/private"))),
@@ -310,7 +326,7 @@ mod tests {
             routing: Routing::RepoLocal,
         };
 
-        let err = pack(Scope::Group, &facts, &resolved, Some(out.to_str().unwrap())).unwrap_err();
+        let err = pack(Scope::Group, &facts, &resolved, Some(out.to_str().uw())).unwrap_err();
         assert!(err.to_string().contains("never transported"), "{err}");
         // No bundle produced.
         assert!(!out.exists());
@@ -320,8 +336,8 @@ mod tests {
     // under the private zone — the content is skipped and reported.
     #[test]
     fn unpack_skips_and_reports_when_the_target_resolves_private() {
-        let tmp = tempfile::tempdir().unwrap();
-        let facts = facts_with_local_root(tmp.path().join(".whisper").to_str().unwrap());
+        let tmp = tempfile::tempdir().uw();
+        let facts = facts_with_local_root(tmp.path().join(".whisper").to_str().uw());
         let resolved = Resolved {
             workspace_root: tmp.path().join("ws"),
             group: Some(("rogue".into(), tmp.path().join(".whisper/private"))),
@@ -341,9 +357,9 @@ mod tests {
             }],
             freeform: vec!["loose line".into()],
         };
-        let input = serde_json::to_string(&bundle).unwrap();
+        let input = serde_json::to_string(&bundle).uw();
 
-        let report = unpack(&input, &facts, &resolved).unwrap();
+        let report = unpack(&input, &facts, &resolved).uw();
         assert_eq!(report["added"], 0);
         assert_eq!(report["private_skipped"], 2); // 1 entry + 1 freeform line
         // Nothing written under the zone.
@@ -356,11 +372,11 @@ mod tests {
 
     #[test]
     fn normal_pack_and_unpack_still_work_without_a_private_target() {
-        let tmp = tempfile::tempdir().unwrap();
-        let facts = facts_with_local_root(tmp.path().join(".whisper").to_str().unwrap());
+        let tmp = tempfile::tempdir().uw();
+        let facts = facts_with_local_root(tmp.path().join(".whisper").to_str().uw());
         let resolved = resolved_at(&tmp.path().join("ws").to_path_buf());
 
-        let report = unpack(&one_entry_bundle(), &facts, &resolved).unwrap();
+        let report = unpack(&one_entry_bundle(), &facts, &resolved).uw();
         assert_eq!(report["added"], 2);
         assert_eq!(report["private_skipped"], serde_json::Value::Null);
         assert!(tmp.path().join(".whisper/env.md").exists());
