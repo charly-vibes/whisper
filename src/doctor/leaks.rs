@@ -140,10 +140,8 @@ fn hostname_assignment(line: &str) -> Option<String> {
                 .chars()
                 .next_back()
                 .is_some_and(|c| c.is_ascii_alphanumeric());
-        if boundary {
-            if let Some(v) = hostname_value(&lower[at + 4..]) {
-                return Some(v);
-            }
+        if boundary && let Some(v) = hostname_value(&lower[at + 4..]) {
+            return Some(v);
         }
         from = at + 4;
     }
