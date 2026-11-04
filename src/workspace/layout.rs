@@ -7,7 +7,7 @@ use super::*;
 
 #[test]
 fn consolidate_merges_nested_files_into_existing_dirs() {
-    let (tmp, canon, legacy, resolved) = nested_merge_fixture();
+    let (_tmp, canon, legacy, resolved) = nested_merge_fixture();
     consolidate(&uw::ws_facts("github.com/u/whisper"), &resolved).uw();
     t_merge_asserts(&canon, &legacy);
 }
