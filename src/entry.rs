@@ -108,7 +108,22 @@ pub enum Item {
 
 /// Parse a line that starts an entry (continuation lines handled by the
 /// caller). Returns `None` for any non-entry line.
-fn parse_entry_line(line: &str) -> Option<Entry> {
+/// Strip a trailing " (<marker> value)" annotation; returns the trimmed
+/// text and the extracted value (None when the marker is absent/malformed).
+fn strip_marker(text: &str, marker: &str) -> (String, Option<String>) {
+    let Some(idx) = text.rfind(marker) else {
+        return (text.to_string(), None);
+    };
+    let suffix = &text[idx..];
+    if !suffix.ends_with(')') {
+        return (text.to_string(), None);
+    }
+    let value = suffix[marker.len()..suffix.len() - 1].to_string();
+    (text[..idx].to_string(), Some(value))
+}
+
+/// Parse one entry line (ts, id, topic, text, supersede markers).
+pub fn parse_entry_line(line: &str) -> Option<Entry> {
     let rest = line.strip_prefix("- ")?;
     let (ts, after) = rest.split_once(' ')?;
     // Timestamp must be canonical RFC-3339 seconds — malformed or
@@ -126,23 +141,8 @@ fn parse_entry_line(line: &str) -> Option<Entry> {
     } else {
         (None, after.strip_prefix(' ').unwrap_or(after))
     };
-    let mut text = after.to_string();
-    let mut superseded_by = None;
-    if let Some(idx) = text.rfind(" (superseded by ") {
-        let suffix = &text[idx..];
-        if suffix.ends_with(')') {
-            superseded_by = Some(suffix[" (superseded by ".len()..suffix.len() - 1].to_string());
-            text.truncate(idx);
-        }
-    }
-    let mut supersedes = None;
-    if let Some(idx) = text.rfind(" (supersedes ") {
-        let suffix = &text[idx..];
-        if suffix.ends_with(')') {
-            supersedes = Some(suffix[" (supersedes ".len()..suffix.len() - 1].to_string());
-            text.truncate(idx);
-        }
-    }
+    let (text, superseded_by) = strip_marker(after, " (superseded by ");
+    let (text, supersedes) = strip_marker(&text, " (supersedes ");
     Some(Entry {
         ts: ts.to_string(),
         id: id.to_string(),
@@ -265,170 +265,5 @@ fn is_issue_ref(tok: &str) -> bool {
     match t.strip_prefix('#') {
         Some(body) => !body.is_empty() && body.chars().all(|c| c.is_ascii_digit()),
         None => false,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const NOW: &str = "2026-09-15T19:30:02Z";
-
-    fn entry(text: &str) -> Entry {
-        Entry {
-            ts: NOW.to_string(),
-            id: entry_id("github.com/u/r", NOW, text),
-            topic: None,
-            text: text.to_string(),
-            supersedes: None,
-            superseded_by: None,
-        }
-    }
-
-    #[test]
-    fn malformed_ts_degrades_to_freeform() {
-        assert!(parse_entry_line("- banana [id:abc] text").is_none());
-        assert!(parse_entry_line("- 2026-13-45T99:99:99Z [id:abc] text").is_none());
-        assert!(parse_entry_line("- 2026-01-01T00:00:00.123Z [id:abc] subsecond").is_none());
-        assert!(parse_entry_line("- 2026-01-01T00:00:00Z [id:abc] ok").is_some());
-    }
-
-    #[test]
-    fn ts_is_second_precision_utc() {
-        let ts = parse_or_now(None).unwrap();
-        assert_eq!(ts.len(), 20);
-        assert!(ts.ends_with('Z'));
-        assert!(ts.starts_with("20"));
-    }
-
-    #[test]
-    fn timestamp_override_is_validated() {
-        assert!(parse_or_now(Some("not-a-date")).is_err());
-        assert_eq!(
-            parse_or_now(Some("2026-01-01T00:00:00Z")).unwrap(),
-            "2026-01-01T00:00:00Z"
-        );
-    }
-
-    #[test]
-    fn id_is_deterministic_per_scope_ts_text() {
-        let a = entry_id("s", NOW, "text");
-        assert_eq!(a, entry_id("s", NOW, "text"));
-        assert_ne!(a, entry_id("s", NOW, "other"));
-        assert_ne!(a, entry_id("s", "2026-09-15T19:30:03Z", "text"));
-        assert_ne!(a, entry_id("t", NOW, "text"));
-        assert_eq!(a.len(), 64); // full sha2 hex, no truncation
-    }
-
-    #[test]
-    fn render_parse_roundtrip() {
-        let e = entry("deploy fails on tuesday");
-        assert_eq!(parse_entry_line(&e.render()).unwrap(), e);
-    }
-
-    #[test]
-    fn render_parse_roundtrip_with_topic_and_marks() {
-        let mut e = entry("use kaniko not docker");
-        e.topic = Some("infra".into());
-        e.supersedes = Some("aa".repeat(64));
-        e.superseded_by = Some("bb".repeat(64));
-        assert_eq!(parse_entry_line(&e.render()).unwrap(), e);
-    }
-
-    #[test]
-    fn freeform_lines_never_parse_as_entries() {
-        assert!(parse_entry_line("- a plain bullet").is_none());
-        assert!(parse_entry_line("## heading").is_none());
-        assert!(parse_entry_line("").is_none());
-        assert!(parse_entry_line("- 2026-09-15T19:30:02Z no id marker").is_none());
-    }
-
-    #[test]
-    fn file_roundtrip_preserves_order_and_freeform() {
-        let raw = "## notes\n\n- plain bullet\n";
-        let e = entry("a fact");
-        let raw = format!("{raw}{}\n\n- another plain\n", e.render());
-        let items = parse_file(&raw);
-        assert_eq!(
-            items,
-            vec![
-                Item::Line("## notes".into()),
-                Item::Line(String::new()),
-                Item::Line("- plain bullet".into()),
-                Item::Entry(e),
-                Item::Line(String::new()),
-                Item::Line("- another plain".into()),
-            ]
-        );
-        assert_eq!(render_file(&parse_file(&raw)), raw);
-    }
-
-    #[test]
-    fn continuation_lines_fold_into_text() {
-        let mut e = entry("line one\nline two");
-        e.topic = Some("t".into());
-        let raw = e.render();
-        let items = parse_file(&raw);
-        match &items[0] {
-            Item::Entry(parsed) => {
-                assert_eq!(parsed.text, "line one\nline two");
-                assert_eq!(parsed.topic.as_deref(), Some("t"));
-            }
-            _ => panic!("expected entry"),
-        }
-    }
-
-    #[test]
-    fn incident_log_lint_flags_dense_date_id_text() {
-        // Three tokens in a short text → over the 3-per-500 floor.
-        let log = "fixed 2026-09-28 in PR #123 commit abc1234d verified";
-        assert!(incident_log_density(log).is_some());
-    }
-
-    #[test]
-    fn incident_log_lint_passes_generalizable_rules() {
-        // One date in a short rule → quiet.
-        assert!(
-            incident_log_density(
-                "deploy fails on tuesdays; retry after the queue drains (seen 2026-09-28)"
-            )
-            .is_none()
-        );
-        // A long rule with two dates spread over >500 chars stays quiet.
-        let long_rule = format!(
-            "Always regenerate Cargo.lock after a version bump before building with --locked; \
-             the locked build fails otherwise. This bit the release pipeline twice. {} \
-             Padding to push the token density under the threshold: the heuristic counts \
-             date-like and id-like tokens per 500 characters of entry text, so a genuinely \
-             long generalizable rule with a couple of incidental dates must never trip it. \
-             Written 2026-09-28 after the v0.6.0 release cycle.",
-            "x".repeat(300)
-        );
-        assert!(incident_log_density(&long_rule).is_none());
-    }
-
-    #[test]
-    fn incident_log_lint_counts_dates_issue_refs_and_shas() {
-        // ISO timestamp + issue ref + sha: three different token shapes.
-        let mixed = "2026-01-01T10:00:00Z #456 broke main, hotfix b1a2c3d4 deployed";
-        assert!(incident_log_density(mixed).is_some());
-    }
-
-    #[test]
-    fn incident_log_lint_ignores_hex_words_without_digits() {
-        // "deadbeef" and "cafe" are hex words but carry no digit — not ids.
-        assert!(
-            incident_log_density(
-                "the deadbeef cafe served beef on a tuesday and the queue drained facedead"
-            )
-            .is_none()
-        );
-        // ...but abc1234d (digits) counts; three digit-bearing ids trip it.
-        assert!(
-            incident_log_density(
-                "reverted abc1234d then rebased deadbeef onto d1e2f3a4b5c6d7e picking 9f8e7d6c"
-            )
-            .is_some()
-        );
     }
 }
