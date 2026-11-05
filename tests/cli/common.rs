@@ -65,12 +65,6 @@ impl<T> Uw<T> for Option<T> {
     }
 }
 
-pub(crate) fn bare_repo_fixture() -> (tempfile::TempDir, std::path::PathBuf) {
-    let tmp = tempfile::tempdir().uw();
-    let repo = tmp.path().join("repo");
-    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
-    (tmp, repo)
-}
 /// Occurrences of the private-zone ignore rule in the repo's .gitignore.
 pub(crate) fn gitignore_rule_count(repo: &std::path::Path) -> usize {
     std::fs::read_to_string(repo.join(".gitignore"))

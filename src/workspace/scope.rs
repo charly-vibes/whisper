@@ -126,8 +126,8 @@ pub fn append_entry(
     if duplicate {
         return Ok(duplicate_report(id));
     }
-    if supersedes.is_some() {
-        return rewrite_with_supersede(target, &raw, new, id, supersedes.expect("checked above"));
+    if let Some(supersedes) = supersedes {
+        return rewrite_with_supersede(target, &raw, new, id, supersedes);
     }
     fast_path_append(target, &raw, new, id)
 }

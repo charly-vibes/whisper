@@ -151,21 +151,3 @@ fn assert_only_branch_extras(report: &InitReport) {
         );
     }
 }
-
-/// Create the canonical/legacy branch dirs and seed their notes.
-fn seed_nested_merge(canon: &std::path::Path, legacy: &std::path::Path) {
-    std::fs::create_dir_all(canon.join("branches/main")).uw();
-    std::fs::create_dir_all(legacy.join("branches/main")).uw();
-    std::fs::create_dir_all(legacy.join("branches/feature--x")).uw();
-    std::fs::write(canon.join("branches/main/notes.md"), "shared note\n").uw();
-    std::fs::write(
-        legacy.join("branches/main/notes.md"),
-        "shared note\nlegacy note\n",
-    )
-    .uw();
-    std::fs::write(
-        legacy.join("branches/feature--x/notes.md"),
-        "feature note\n",
-    )
-    .uw();
-}

@@ -61,9 +61,9 @@ fn unmanaged_files(facts: &Facts, resolved: &Resolved) -> Vec<String> {
     unmanaged
 }
 
-/// Per-scope staleness scan (whisper-t6j): Ro5 gates — last_recalled
-/// > 90d, or never-recalled with entry age > 30d. Absent sidecars mean
-/// telemetry hasn't started: entries stay fresh, not stale.
+/// Per-scope staleness scan (whisper-t6j): Ro5 gates — last_recalled over
+/// 90 days old, or never-recalled with entry age over 30 days. Absent
+/// sidecars mean telemetry hasn't started: entries stay fresh, not stale.
 /// Returns (stale ids, never-used ids) as display strings.
 fn staleness_lists(facts: &Facts, resolved: &Resolved) -> (Vec<String>, Vec<String>) {
     let now = crate::entry::parse_or_now(std::env::var("TURU_NOW").ok().as_deref()).ok();

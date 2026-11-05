@@ -30,7 +30,6 @@ fn doctor_cmd(tmp: &tempfile::TempDir, repo: &std::path::Path) -> assert_cmd::as
 }
 
 #[test]
-#[test]
 fn doctor_warns_when_repo_private_root_shadows_global_rules() {
     // GH-issue follow-up: a repo-private `workspace_root` intentionally beats
     // everything — which also relocates the global scope (`rules.md`) for
@@ -89,6 +88,7 @@ fn shadowed_fixture(
     (home, repo, private_ws)
 }
 
+#[test]
 fn check_warns_when_repo_private_root_shadows_global_rules() {
     // whisper-122 follow-through: `turu check` is the fast-path validator —
     // it must surface the shadowing alongside `turu doctor`.
@@ -107,14 +107,6 @@ fn check_warns_when_repo_private_root_shadows_global_rules() {
 /// `turu check --json` for this checkout (exit 0 expected).
 fn check(home: &std::path::Path, repo: &std::path::Path) -> assert_cmd::assert::Assert {
     turu(home, repo).args(["check", "--json"]).assert()
-}
-
-/// An empty git repo with no workspace yet (doctor warns on it).
-fn bare_repo_fixture() -> (tempfile::TempDir, std::path::PathBuf) {
-    let tmp = tempfile::tempdir().uw();
-    let repo = tmp.path().join("repo");
-    git_repo(&repo, "git@cv:charly-vibes/whisper.git");
-    (tmp, repo)
 }
 
 #[test]

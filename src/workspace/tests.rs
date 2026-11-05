@@ -253,13 +253,3 @@ fn consolidate_merges_extending_never_duplicating() {
     assert_eq!(report.merged, vec![canon.join("env.md")]);
     assert!(!legacy.exists());
 }
-
-/// Facts with a repo-local root at `/checkout/.whisper`.
-fn checkout_path_facts() -> Facts {
-    Facts {
-        repo_key: "github.com/u/r".into(),
-        branch_slug: "main".into(),
-        worktree_slot: ".git".into(),
-        repo_local_root: Some(PathBuf::from("/checkout/.whisper")),
-    }
-}

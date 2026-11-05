@@ -65,7 +65,7 @@ fn append_hint(report: &workspace::AppendReport) -> Option<String> {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn recall_cmd(
     ctx: &Ctx,
-    scope: &String,
+    scope: &str,
     topic: Option<String>,
     budget: Option<usize>,
     digest: bool,
