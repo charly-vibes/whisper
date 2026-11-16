@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.2] - 2026-11-16
+
+### Fixed
+
+- The published `turu` binary reports the version its release names. v0.11.1
+  was tagged on a tree whose `Cargo.toml` still said `0.11.0`, so the asset
+  `turu_0.11.1_linux_amd64.tar.gz` shipped a binary answering `turu 0.11.0`;
+  installers that read the binary version (ddl) kept treating 0.11.0 as
+  current and could never adopt the release. No behavior change beyond the
+  version identity.
+
 ## [0.6.0] - 2026-09-17
 
 ### Added
