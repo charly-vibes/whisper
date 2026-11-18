@@ -18,6 +18,12 @@
 - **THEN** the new entry is appended after the existing content
 - **AND** freeform lines and prior entries remain present, in order
 
+#### Scenario: Empty input rejected
+
+- **WHEN** `turu append` runs with blank `--text` or empty stdin
+- **THEN** the command fails with an error and a next-step suggestion
+- **AND** the scope file is unchanged
+
 ## ADDED Requirements
 
 ### Requirement: Topic keys are validated mechanically
