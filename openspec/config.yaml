@@ -1,0 +1,53 @@
+schema: spec-driven
+
+context: |
+  `whisper-vibes` (bins: `turu`, `turututu`, `whisper`) is the deterministic
+  knowledge-workspace CLI for AI agents: canonical repo keys, branch slugs,
+  worktree slots, and scope-based knowledge routing as pure binary behavior —
+  the mechanical half of the `whisper` skill. The LLM/skill owns judgment; turu
+  owns mechanics.
+
+  Stack: Rust 2024; clap 4 derive; serde/serde_json; toml; sha2; genesis-vibes
+  0.6 (envelope, guide, config, managed_block conventions).
+
+  Conventions:
+  - All output goes through the genesis JSON envelope: `--json` is the machine
+    contract, `--human` the default. Never hand-roll envelopes or config
+    parsing.
+  - The command is `turu`; `turututu` and `whisper` are alias bins — keep all
+    three working.
+  - Canonical repo key derivation is a pure function of the remote URL
+    (`src/workspace.rs`): never machine-specific, never invented.
+  - Config precedence: repo (`.whisper/config.toml`, gitignored) > group
+    (global `[groups.*]`) > global (`~/.config/whisper/config.toml`).
+  - Knowledge routing scopes: global / group / repo / branch / worktree —
+    resolved, never guessed.
+  - The `<!-- TURU:START -->` managed block in `AGENTS.md` is the agent-facing
+    contract; regenerate only via `turu sync`.
+  - `turu consolidate` migrates legacy repo-key dirs by rename/extend without
+    duplicates — the precedent for any merge behavior.
+
+  Testing: TDD + Tidy First, one red→green→refactor cycle per ticket with
+  separate tickets for refactors; `just build` / `just test` / `just lint`
+  (clippy `-D warnings`); integration tests via assert_cmd + predicates +
+  tempfile in `tests/`.
+
+  Memory lifecycle: whisper is a Record-only tool today; the proposals fill the
+  remaining stages, and order matters because entry-model is the substrate.
+  `add-entry-model` (Manage) is the prerequisite for `add-recall-serving`
+  (Recall), `add-distill-contract` (Distill), and `add-shared-bundle` (Share —
+  its transport fork is still open). Boundary rule: turu owns the mechanics of
+  every stage; the skill/LLM owns judgment.
+
+rules:
+  proposal:
+    - Name the lifecycle stage (record, manage, recall, distill, share) the
+      change belongs to and its dependency on add-entry-model
+  tasks:
+    - Map each task to a spec scenario and a red→green→refactor cycle
+
+operations:
+  archive:
+    guidance:
+      - Confirm the managed-block contract and config precedence rules still
+        match the archived behavior

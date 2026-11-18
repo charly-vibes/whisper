@@ -7,7 +7,7 @@ to orient yourself.
 Detected workflow tools:
 - **wai** — research, reasoning, and design decisions
 - **beads** — issue tracking (tasks, bugs, dependencies). CLI command: **`bd`** (not `beads`)
-- **openspec** — specifications and change proposals (see `openspec/AGENTS.md`)
+- **openspec** — specifications and change proposals (see `openspec/config.yaml` and the `openspec-*` skills in `.agents/skills/`)
 
 > **CRITICAL**: Apply TDD and Tidy First throughout — not just when writing code:
 > - **Planning/task creation**: each ticket should map to a red→green→refactor cycle; refactoring tasks must be separate tickets from feature tasks.
@@ -48,7 +48,7 @@ Read it at the start of your first session or when you need detailed guidance.
 Keep this managed block so `wai init` can refresh the instructions.
 
 
-<!-- provenance: generator=wai version=0.12.3 source=WAI sha=3e02f7c4 -->
+<!-- provenance: generator=wai version=0.13.0 source=WAI sha=c2520444 -->
 <!-- WAI:END -->
 
 <!-- ah:managed:start -->
@@ -157,4 +157,7 @@ context before starting research or creating tickets.
 
 > **Before research or ticket creation**: always run `wai search "<topic>"` to
 > check for known patterns. Do not rediscover what is already documented.
+
+
+<!-- provenance: generator=wai version=0.13.0 source=WAI:REFLECT:REF sha=73879972 -->
 <!-- WAI:REFLECT:REF:END -->
