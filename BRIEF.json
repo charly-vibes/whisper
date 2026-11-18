@@ -1,0 +1,216 @@
+{
+  "ok": true,
+  "envelope_version": "0.1",
+  "cli_version": "0.1.0",
+  "envelope_kind": "ok",
+  "data": {
+    "schema_version": "brief.v1",
+    "as_of": "2026-11-18",
+    "generated_at": "2026-11-18T21:12:09.053956290Z",
+    "sources": [
+      {
+        "name": "beads",
+        "status": "present",
+        "observed_at": "2026-11-18T16:06:56Z",
+        "staleness": "fresh",
+        "detail": "3 malformed line(s) skipped in .beads/issues.jsonl"
+      },
+      {
+        "name": "git",
+        "status": "present",
+        "observed_at": "2026-11-18T16:09:04Z",
+        "staleness": "fresh",
+        "detail": null
+      },
+      {
+        "name": "openspec",
+        "status": "present",
+        "observed_at": "2026-11-18T14:49:17.872958491Z",
+        "staleness": "fresh",
+        "detail": null
+      },
+      {
+        "name": "whisper",
+        "status": "present",
+        "observed_at": "2026-10-15T14:38:02Z",
+        "staleness": "stale",
+        "detail": null
+      },
+      {
+        "name": "curation",
+        "status": "present",
+        "observed_at": "2026-11-18T21:12:09.047748660Z",
+        "staleness": "fresh",
+        "detail": null
+      }
+    ],
+    "curation": {
+      "updated_at": "2026-11-18T21:12:09.047748660Z",
+      "confirmed_at": null
+    },
+    "purpose_lite": null,
+    "focus": [],
+    "in_flight": [
+      {
+        "id": "whisper-6p2",
+        "title": "docs: apply README front-door standard v0.4 (§5.1)",
+        "status": "open",
+        "priority": 1,
+        "blocked_by": [],
+        "age_days": 2,
+        "reason": null,
+        "confirmed_at": null
+      },
+      {
+        "id": "whisper-7u5",
+        "title": "Implement Hegel property tests",
+        "status": "open",
+        "priority": 1,
+        "blocked_by": [
+          "whisper-cyl"
+        ],
+        "age_days": 2,
+        "reason": null,
+        "confirmed_at": null
+      },
+      {
+        "id": "whisper-cyl",
+        "title": "Research: Hegel property-based testing plan (antithesis-research)",
+        "status": "open",
+        "priority": 1,
+        "blocked_by": [],
+        "age_days": 2,
+        "reason": null,
+        "confirmed_at": null
+      },
+      {
+        "id": "whisper-11e",
+        "title": "openspec 1.x upgrade blocked: 4 validation failures under @fission-ai/openspec@1.14.2",
+        "status": "open",
+        "priority": 3,
+        "blocked_by": [],
+        "age_days": 33,
+        "reason": null,
+        "confirmed_at": null
+      }
+    ],
+    "blocked": [
+      {
+        "id": "whisper-7u5",
+        "title": "Implement Hegel property tests",
+        "status": "open",
+        "priority": 1,
+        "blocked_by": [
+          "whisper-cyl"
+        ],
+        "age_days": 2,
+        "reason": null,
+        "confirmed_at": null
+      }
+    ],
+    "next": [
+      {
+        "id": "whisper-6p2",
+        "title": "docs: apply README front-door standard v0.4 (§5.1)",
+        "status": "open",
+        "priority": 1,
+        "blocked_by": [],
+        "age_days": 2,
+        "reason": null,
+        "confirmed_at": null
+      },
+      {
+        "id": "whisper-cyl",
+        "title": "Research: Hegel property-based testing plan (antithesis-research)",
+        "status": "open",
+        "priority": 1,
+        "blocked_by": [],
+        "age_days": 2,
+        "reason": null,
+        "confirmed_at": null
+      },
+      {
+        "id": "whisper-11e",
+        "title": "openspec 1.x upgrade blocked: 4 validation failures under @fission-ai/openspec@1.14.2",
+        "status": "open",
+        "priority": 3,
+        "blocked_by": [],
+        "age_days": 33,
+        "reason": null,
+        "confirmed_at": null
+      }
+    ],
+    "parked": [],
+    "needs_retriage": [],
+    "recent": [
+      {
+        "sha": "475513d4ccf3ab65fe11cfd96b762f458c828da8",
+        "committed_at": "2026-11-18T16:09:04Z",
+        "subject": "beads: close whisper-4z4",
+        "outcome": null
+      },
+      {
+        "sha": "34637d9ab08e9b38ac54671e798dc26418f59189",
+        "committed_at": "2026-11-18T16:02:35Z",
+        "subject": "chore(gates): render the managed gate block from .ddl/config.toml",
+        "outcome": null
+      },
+      {
+        "sha": "5753f45b2e94477cd4586a4b580167ae4774bfd0",
+        "committed_at": "2026-11-18T15:45:19Z",
+        "subject": "ci: pin pretender 0.10.0 and drop the expired advisory lease",
+        "outcome": null
+      },
+      {
+        "sha": "83925dadd1005ed7bc423e7598805c89ba56fd07",
+        "committed_at": "2026-11-18T15:17:38Z",
+        "subject": "beads: file whisper-4z4 (pretender advisory lease expired in the CI smoke step)",
+        "outcome": null
+      },
+      {
+        "sha": "1770002dd71a35418ece20051d0c096e4c1921d1",
+        "committed_at": "2026-11-18T15:01:12Z",
+        "subject": "chore(openspec): migrate project.md into config.yaml; pin 2.1.0",
+        "outcome": null
+      }
+    ],
+    "health": {
+      "status": "amber",
+      "basis": "signals",
+      "signals": [
+        {
+          "kind": "orphan_commits",
+          "reason": "18 commits in the 14-day window link no tracker id or open work-item path: 1770002dd71a35418ece20051d0c096e4c1921d1 (chore(openspec): migrate project.md into config.yaml; pin 2.1.0); 309d8fca784022598619e63ffbd3326057b3eddb (docs: apply issue-review fixes to README/release tickets); 34637d9ab08e9b38ac54671e798dc26418f59189 (chore(gates): render the managed gate block from .ddl/config.toml); 5753f45b2e94477cd4586a4b580167ae4774bfd0 (ci: pin pretender 0.10.0 and drop the expired advisory lease); 5ba4347a96f1b75b46f4a64f63033fe9545c762b (style: collapse nested if in hostname_assignment (clippy)); 69f9fe3086acf419530692b6cd81dd708906988a (style: prefix unused fixture binding with underscore (clippy)); 923983112bfc0fe5faa1e0dd535b19edc1e1c17b (refactor(quality): split tests/cli.rs into topic modules; fix all cli test debt); ab2db07ea3b0df57558b7494508dbaca79e96c55 (docs: file README front-door and release tickets); b2759ed5582ee30424dde8f5a5057debe9446187 (refactor(quality): split main.rs dispatch into cmds module (admin/knowledge/support)); b539acf9e14999e7c4c7198fbaf9b9dfe2a5803c (release: 0.11.2 — the binary reports the version the tag names); bc6f88661349aeb6b26c7416f9e8f2315f1d53ca (docs(brief): pretender debt fix brief — orchestrator artifact (docs-only; gate blocked by pre-existing debt)); cb5d9705be86ab9a71ca9ac06f8c5a62f9154b1a (refactor(quality): split doctor.rs into module dir (checks/content/leaks/managed/routing/tests)); cf0e410606de137ed4bcfd6e23cf732c9e0b7e66 (fix(lint): resolve clippy denies left over from module splits); df2672e74f591233352e72f7e30e83d3495d217e (refactor(quality): split oversized functions; move bundle/config tests to integration tests); e280c17288a94984e027f9ec9762df747e89c0ff (chore(openspec): adopt the 2.1 artifact layout); e472f206a075073b53815b7f5de74d2ef05dcc5d (refactor(quality): distill begin/commit + entry parsing splits; entry tests to integration file); ee4922f4bd9650d3844970913b6279154c7c21e0 (refactor(quality): clear unwrap/mut_ratio/function_lines debt in recall, bundle, config, skill_pack, usage); ef6954192ba36a8c73cfb64752cbf37da0ae5a9f (refactor(quality): split workspace.rs into module dir (block/init/resolve/scope/layout/tests))"
+        },
+        {
+          "kind": "spec_change_without_bead",
+          "reason": "openspec changes link no tracker id: `add-entry-model` changed 0 days ago"
+        }
+      ],
+      "owner": null,
+      "reason": "orphan_commits: 18 commits in the 14-day window link no tracker id or open work-item path: 1770002dd71a35418ece20051d0c096e4c1921d1 (chore(openspec): migrate project.md into config.yaml; pin 2.1.0); 309d8fca784022598619e63ffbd3326057b3eddb (docs: apply issue-review fixes to README/release tickets); 34637d9ab08e9b38ac54671e798dc26418f59189 (chore(gates): render the managed gate block from .ddl/config.toml); 5753f45b2e94477cd4586a4b580167ae4774bfd0 (ci: pin pretender 0.10.0 and drop the expired advisory lease); 5ba4347a96f1b75b46f4a64f63033fe9545c762b (style: collapse nested if in hostname_assignment (clippy)); 69f9fe3086acf419530692b6cd81dd708906988a (style: prefix unused fixture binding with underscore (clippy)); 923983112bfc0fe5faa1e0dd535b19edc1e1c17b (refactor(quality): split tests/cli.rs into topic modules; fix all cli test debt); ab2db07ea3b0df57558b7494508dbaca79e96c55 (docs: file README front-door and release tickets); b2759ed5582ee30424dde8f5a5057debe9446187 (refactor(quality): split main.rs dispatch into cmds module (admin/knowledge/support)); b539acf9e14999e7c4c7198fbaf9b9dfe2a5803c (release: 0.11.2 — the binary reports the version the tag names); bc6f88661349aeb6b26c7416f9e8f2315f1d53ca (docs(brief): pretender debt fix brief — orchestrator artifact (docs-only; gate blocked by pre-existing debt)); cb5d9705be86ab9a71ca9ac06f8c5a62f9154b1a (refactor(quality): split doctor.rs into module dir (checks/content/leaks/managed/routing/tests)); cf0e410606de137ed4bcfd6e23cf732c9e0b7e66 (fix(lint): resolve clippy denies left over from module splits); df2672e74f591233352e72f7e30e83d3495d217e (refactor(quality): split oversized functions; move bundle/config tests to integration tests); e280c17288a94984e027f9ec9762df747e89c0ff (chore(openspec): adopt the 2.1 artifact layout); e472f206a075073b53815b7f5de74d2ef05dcc5d (refactor(quality): distill begin/commit + entry parsing splits; entry tests to integration file); ee4922f4bd9650d3844970913b6279154c7c21e0 (refactor(quality): clear unwrap/mut_ratio/function_lines debt in recall, bundle, config, skill_pack, usage); ef6954192ba36a8c73cfb64752cbf37da0ae5a9f (refactor(quality): split workspace.rs into module dir (block/init/resolve/scope/layout/tests)); spec_change_without_bead: openspec changes link no tracker id: `add-entry-model` changed 0 days ago"
+    },
+    "truncation": {
+      "applied": true,
+      "omitted_counts": {
+        "recent": 113
+      }
+    },
+    "head_sha": "475513d4ccf3ab65fe11cfd96b762f458c828da8",
+    "source_hash": "00e6c8c822c0f1f589eba73cb33107bc6537bc5ffa83092db488eef2bf61b9b0",
+    "warnings": [
+      {
+        "source": "beads",
+        "code": "beads_parse_error",
+        "detail": "3 malformed line(s) skipped in .beads/issues.jsonl"
+      }
+    ]
+  },
+  "warnings": [],
+  "hints": [],
+  "meta": {
+    "duration_ms": 0,
+    "tx": null,
+    "request_id": null
+  }
+}
