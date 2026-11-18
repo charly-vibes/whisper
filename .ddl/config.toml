@@ -1,3 +1,6 @@
 install_source = "auto"
 auto_upgrade = false
 gitignore_strategy = "prompt"
+
+[gates]
+pretender_gate = "pretender check --mode gate"
