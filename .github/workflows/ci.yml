@@ -43,7 +43,7 @@ jobs:
 
       - name: Install ecosystem tools (§4 dogfood matrix, pinned)
         run: |
-          cargo install --locked pretender@0.7.0 wai-cli@2026.9.28 dulce-de-leche@0.7.0
+          cargo install --locked pretender@0.10.0 wai-cli@2026.9.28 dulce-de-leche@0.7.0
       - name: Install bd (beads, pinned §4)
         run: |
           tmp=$(mktemp -d)
@@ -53,17 +53,17 @@ jobs:
           tar -xzf "$tmp/bd.tgz" -C "$tmp" bd
           sudo mv "$tmp/bd" /usr/local/bin/bd
       # §4 dogfood: installed tools must run, not just install.
-      # pretender 0.7.0 gates by default; this repo adopts tiered mode under
-      # an advisory lease — 87 pre-existing violations must not block CI.
-      # Renew the lease by pushing the date forward (a visible, reviewable
-      # diff); after expiry the check fails closed by design.
+      # pretender 0.10.0 parses this crate; the gate stays diff-scoped so
+      # pre-existing violations in untouched files cannot block every run
+      # (the 0.7.0 advisory lease retired with the pin — it failed closed
+      # on expiry, taking CI down on 2026-11-03).
       - name: Smoke dogfooded tools
         env:
           DO_NOT_TRACK: "1"
         run: |
           bd --version >/dev/null
           ddl status >/dev/null
-          pretender check --advisory-until 2026-11-03 >/dev/null
+          pretender check --diff-only --mode gate >/dev/null
       - name: Smoke live Pages URL
         run: curl -fsS --max-time 10 --retry 2 https://charly-vibes.github.io/whisper/ >/dev/null
       # Run the exact same command as local development
