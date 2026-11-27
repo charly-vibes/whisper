@@ -218,11 +218,14 @@ fn run(cli: Cli) -> i32 {
             // non-zero exits so `turu feedback bug --from-last-error` has a
             // record to read (best-effort, never shadows the real error).
             let record = genesis::feedback::scratch::ErrorRecord {
-                ts: scratch_timestamp(),
-                argv: std::env::args().collect(),
-                exit: 1,
                 footer: err.suggestion.clone(),
-                kind: "error".to_string(),
+                message: Some(err.message.clone()),
+                ..genesis::feedback::scratch::ErrorRecord::new(
+                    scratch_timestamp(),
+                    std::env::args().collect(),
+                    1,
+                    "error",
+                )
             };
             genesis::feedback::scratch::write_scratch_best_effort("turu", &record);
             let out = match &err.suggestion {

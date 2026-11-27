@@ -9,8 +9,8 @@
 //! repair it against `git check-ignore` truth, never by text matching.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
+use genesis::git;
 use serde::{Deserialize, Serialize};
 
 mod block;
@@ -54,68 +54,40 @@ pub struct Facts {
 
 // ---------------------------------------------------------------------------
 // Git fact derivation
+//
+// The git primitives below are `genesis::git` calls; their typed errors
+// map to the same lossy fallbacks the facts contract specifies (the
+// machine-local key/slug), so a failed query never changes routing —
+// it degrades. No query logic is reimplemented here.
 // ---------------------------------------------------------------------------
 
-/// Run `git` in `dir`, returning trimmed stdout or `None` on any failure.
-fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-}
-
-/// Canonical repo key from a remote URL. Pure function.
-///
-/// - `git@host:org/repo.git` → `host/org/repo`
-/// - `https://host/org/repo.git` → `host/org/repo`
-/// - `ssh://git@host/org/repo.git` → `host/org/repo`
-/// - no remote → `local/<basename>` (same key on every machine)
+/// Canonical repo key from a remote URL. Pure function — a delegation to
+/// `genesis::git::remote_key`, which drops credentials (including PAT
+/// tokens), protocol, and query, and normalizes scp-style `host:path`
+/// syntax to `host/path`. Trailing slashes are trimmed so a URL's key
+/// never differs by a path-irrelevant character.
 pub fn canonical_key(url: &str) -> String {
-    let trimmed = url.trim();
-    // Strip scheme, then any `git@` user prefix (covers `git@host:path`
-    // and `ssh://git@host/path` forms).
-    let stripped = ["https://", "http://", "ssh://"]
-        .iter()
-        .find_map(|p| trimmed.strip_prefix(p))
-        .unwrap_or(trimmed);
-    let s = stripped.strip_prefix("git@").unwrap_or(stripped);
-    // Colons always become slashes (keeps keys path-safe).
-    let s = s.replacen(':', "/", 1);
-    // Strip trailing `.git` and slashes.
-    let s = s.strip_suffix(".git").unwrap_or(&s);
-    s.trim_end_matches('/').to_string()
+    genesis::git::remote_key(url.trim())
+        .trim_end_matches('/')
+        .to_string()
 }
 
-/// Canonical repo key for the checkout at `dir`.
+/// Canonical repo key for the checkout at `dir`. No `origin` remote (or a
+/// failed query) → `local/<basename>` (same key on every machine).
 pub fn repo_key(dir: &Path) -> String {
-    match git(dir, &["remote", "get-url", "origin"]) {
-        Some(url) if !url.is_empty() => canonical_key(&url),
-        _ => {
-            let name = git(dir, &["rev-parse", "--show-toplevel"])
-                .map(|t| {
-                    Path::new(&t)
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or(t)
-                })
-                .unwrap_or_else(|| {
-                    dir.file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "unknown".to_string())
-                });
-            format!("local/{name}")
-        }
+    match git::remote_url(dir, "origin") {
+        Ok(Some(url)) => git::remote_key(&url),
+        _ => format!("local/{}", basename(&repo_root(dir))),
     }
 }
 
-/// Branch slug: `git rev-parse --abbrev-ref HEAD` with `/` → `--`.
+/// Branch slug: the checked-out branch (`genesis::git::current_branch`)
+/// with `/` → `--`; detached, unborn, or a failed query → `none`.
 pub fn branch_slug(dir: &Path) -> String {
-    git(dir, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .unwrap_or_else(|| "none".to_string())
-        .replace('/', "--")
+    match git::current_branch(dir) {
+        Ok(Some(branch)) => branch.replace('/', "--"),
+        Ok(None) | Err(_) => "none".to_string(),
+    }
 }
 
 /// Worktree slot, per the skill rule: basename of the git common dir
@@ -124,10 +96,10 @@ pub fn branch_slug(dir: &Path) -> String {
 /// as `.` — the slot is then the bare dir's basename (deployed scenario
 /// workspace-routing/bare-repo).
 pub fn worktree_slot(dir: &Path) -> String {
-    match git(dir, &["rev-parse", "--git-common-dir"]) {
-        Some(common_dir) if common_dir == "." => basename(dir),
-        Some(common_dir) => basename(Path::new(&common_dir)),
-        None => basename(dir),
+    match git::worktree_facts(dir) {
+        Ok(facts) if facts.common_dir == "." => basename(dir),
+        Ok(facts) => basename(Path::new(&facts.common_dir)),
+        Err(_) => basename(dir),
     }
 }
 
@@ -139,9 +111,7 @@ fn basename(p: &Path) -> String {
 
 /// Git repo root for `dir` (falls back to `dir` outside a repo).
 pub fn repo_root(dir: &Path) -> PathBuf {
-    git(dir, &["rev-parse", "--show-toplevel"])
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dir.to_path_buf())
+    git::repo_root_from(dir).unwrap_or_else(|_| dir.to_path_buf())
 }
 
 /// Path of the agent-facing file that hosts the turu managed block:
@@ -152,8 +122,11 @@ pub fn agents_file(dir: &Path) -> PathBuf {
 
 pub fn collect_facts(dir: &Path) -> Facts {
     // The repo-local root exists only for a genuine working tree — outside
-    // one, repo/branch scopes fall back to the machine-local store.
-    let in_repo = git(dir, &["rev-parse", "--is-inside-work-tree"]).is_some_and(|v| v == "true");
+    // one, repo/branch scopes fall back to the machine-local store. The
+    // walk-based `repo_root_from` fails exactly when no `.git` entry sits
+    // above `dir` — a bare repo's git dir carries none, so bare and
+    // out-of-repo starts both resolve to `None` here.
+    let in_repo = git::repo_root_from(dir).is_ok();
     Facts {
         repo_key: repo_key(dir),
         branch_slug: branch_slug(dir),

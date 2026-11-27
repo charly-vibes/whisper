@@ -19,13 +19,12 @@ fn genesis_api_feedback_and_scratch_roundtrip() {
     use genesis::feedback::scratch::ErrorRecord;
     let cache = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
-    let record = ErrorRecord {
-        ts: "2026-09-17T12:00:00Z".into(),
-        argv: vec!["turu".into(), "recall".into(), "repo".into()],
-        exit: 1,
-        footer: None,
-        kind: "error".into(),
-    };
+    let record = ErrorRecord::new(
+        "2026-09-17T12:00:00Z",
+        vec!["turu".into(), "recall".into(), "repo".into()],
+        1,
+        "error",
+    );
     genesis::feedback::scratch::write_scratch_best_effort("turu", &record);
     assert!(genesis::feedback::scratch::read_last_error("turu").is_some());
     let args = genesis::feedback::FeedbackArgs::new("bug", true, true);

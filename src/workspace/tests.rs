@@ -24,6 +24,33 @@ fn canonical_key_variants() {
 }
 
 #[test]
+fn canonical_key_matches_genesis_remote_key_on_fixture_urls() {
+    // jxg.3: canonical_key is a delegation to the shared primitive, not a
+    // dialect of it — the two must stay equivalent across the fixture URL
+    // set (scp, ssh, https, PAT-carrying URLs), or group configs keyed by
+    // one spelling would silently split from the other.
+    let fixtures = [
+        "git@cv:charly-vibes/whisper.git",
+        "git@github.com:u/r.git",
+        "ssh://git@github.com/u/r.git",
+        "ssh://git@github.com:2222/u/r.git",
+        "https://github.com/u/r.git",
+        "https://github.com/u/r",
+        "http://github.com/u/r",
+        "https://pat@github.com/owner/repo.git",
+        "https://user:pass@gitlab.com/owner/repo",
+        "git://github.com/u/r.git",
+    ];
+    for url in fixtures {
+        assert_eq!(
+            canonical_key(url),
+            genesis::git::remote_key(url),
+            "diverged on {url}"
+        );
+    }
+}
+
+#[test]
 fn scope_parse() {
     use std::str::FromStr;
     assert_eq!(Scope::from_str("global").uw(), Scope::Global);
